@@ -21,7 +21,7 @@ __global__ void conv_forward(Tensor<float, 4> input, Tensor<float, 4> output, Te
         width = input.dims[3],
         filter_size = weights.dims[2];
 
-    if (x+filter_size >= width || y+filter_size >= height || c_out >= output_channels){
+    if (x+filter_size > width || y+filter_size > height || c_out >= output_channels){
         return;
     }
 
@@ -33,12 +33,18 @@ __global__ void conv_forward(Tensor<float, 4> input, Tensor<float, 4> output, Te
         for(int c=0; c<input_channels; c++){
             for(int row=y; row<y+filter_size; row++){
                 for(int col=x; col<x+filter_size; col++){
-                    sum += input(b, c, row, col) * weights(c_out, row, col);
+                    sum += input(b, c, row, col) * weights(c_out, c, row-y, col-x);
                 }
             }
         }
+        
+        if(threadIdx.x == 0){
+            printf("sum %f \n", sum);
 
-        output(b, c_out, x, y) = sum;
+        }
+
+
+        output(b, c_out, y, x) = sum;
     }
 }
 
@@ -50,6 +56,17 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     float* d_in;
     cudaMalloc(&d_in, input.size * sizeof(float));
     cudaMemcpy(d_in, input.data, input.size * sizeof(float), cudaMemcpyHostToDevice);
+    float* d_weights;
+    cudaMalloc(&d_weights, this->weights.size * sizeof(float));
+    cudaMemcpy(d_weights, this->weights.data, this->weights.size * sizeof(float), cudaMemcpyHostToDevice);
+    float* d_bias;
+    cudaMalloc(&d_bias, this->bias.size * sizeof(float));
+    cudaMemcpy(d_bias, this->bias.data, this->bias.size * sizeof(float), cudaMemcpyHostToDevice);
+
+    this->bias.data = d_bias;
+    this->weights.data = d_weights;
+    input.data = d_in;
+
     // cudaMalloc(&d_in, 4*input.dims(0)*input.dims(1)*input.dims(2)*input.dims(3));
     // cudaMemcpy(input, d_in, sizeof(input), cudaMemcpyHostToDevice);
     //
@@ -62,7 +79,7 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
 
     Tensor<float, 4> output(batch_size, output_channels, out_height, out_width );
 
-    int N = out_height*out_width;
+    int N = 768;// out_height*out_width;
     int tds = 16; // 2d block -> 256 threads per thread block
     int blocks = (int) ceil(N / tds);
 
@@ -70,18 +87,15 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     dim3 blockDim(blocks, blocks, output_channels );
 
     conv_forward <<<blockDim, threadDim>>>(input, output, weights, bias);
-    
-    // Temp 
-    float* h_out;
-    h_out = (float*) malloc(sizeof(int)*output.dims[0]*output.dims[1]*output.dims[2]*output.dims[3]);
+    cudaDeviceSynchronize();
 
     Tensor<float, 4> result(batch_size, output_channels, out_height, out_width);
 
-    output.toHost(h_out, batch_size*output_channels*out_height*out_width);
+    // output.toHost(result.data, result.size*sizeof(float));
 
-    cudaMemcpy(result.data, h_out, sizeof(float) * output.dims[0] * output.dims[1] * output.dims[2] * output.dims[3], cudaMemcpyHostToDevice);
-
-    free(h_out);
+    cudaMemcpy(result.data, output.data, sizeof(float) * output.size, cudaMemcpyDeviceToHost);
+    result.print();
+    // free(output.data);
 
     // Free the device memory allocated for input tensor
     cudaFree(d_in);
