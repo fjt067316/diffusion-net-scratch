@@ -1,5 +1,4 @@
-// #include "../utils/Layer.cpp"
-#include "../utils/Tensor.cpp"
+#include "../../utils/Tensor.h"
 
 #pragma once 
 
@@ -12,12 +11,17 @@ public:
     Tensor<float, 4> weights;
     Tensor<float, 1> bias;
 
-    Conv2d(int input_channels, int output_channels, int filter_size) :
+    int padding;
+    int stride;
+
+    Conv2d(int input_channels, int output_channels, int filter_size, int padding=0, int stride=1) :
     input_channels(input_channels),
     output_channels(output_channels),
     filter_size(filter_size),
     weights({output_channels, input_channels, filter_size, filter_size}),
-    bias({output_channels})
+    bias({output_channels}),
+    padding(padding),
+    stride(stride)
     // Layer("conv")
     {}
 
