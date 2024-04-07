@@ -75,36 +75,46 @@ int main(){
 
     // Define the dimensions of the tensor
     int batch_size = 5;
-    int channels = 3;
-    int height = 12;
-    int width = 20;
-    int filter_size = 4;
+    int channels = 1;
+    int height = 2;
+    int width = 2;
+    int filter_size = 2;
 
     // Create the tensor
     Tensor<float, 4> input(batch_size, channels, height, width);
     Tensor<float, 4> filters(channels, channels, filter_size, filter_size);
-    ConvTranspose2d conv(channels, channels, filter_size, 1, 2); // in_channel, out_channel, filter_size, padding, stride
+    ConvTranspose2d conv(channels, channels, filter_size, 0, 1); // in_channel, out_channel, filter_size, padding, stride
 
     // Fill the tensor with random values between -1 and 1
     for (int b = 0; b < batch_size; ++b) {
         for (int c = 0; c < channels; ++c) {
-            for (int h = 0; h < height; ++h) {
-                for (int w = 0; w < width; ++w) {
-                    input(b, c, h, w) = rand_float();
-                }
-            }
+        //     for (int h = 0; h < height; ++h) {
+        //         for (int w = 0; w < width; ++w) {
+        //             input(b, c, h, w) = rand_float();
+        //         }
+        //     }
+            input(b, c, 0, 0) = 1;
+            input(b, c, 0, 1) = 2;
+            input(b, c, 1, 0) = 3;
+            input(b, c, 1, 1) = 4;
+
         }
     }
 
     for (int b = 0; b < channels; ++b) {
         for (int c = 0; c < channels; ++c) {
-            for (int h = 0; h < filter_size; ++h) {
-                for (int w = 0; w < filter_size; ++w) {
-                    filters(b, c, h, w) = rand_float();
-                }
-            }
+            // for (int h = 0; h < filter_size; ++h) {
+            //     for (int w = 0; w < filter_size; ++w) {
+            //         filters(b, c, h, w) = rand_float();
+            //     }
+            // }
+            filters(b, c, 0, 0) = 1;
+            filters(b, c, 0, 1) = 2;
+            filters(b, c, 1, 0) = 3;
+            filters(b, c, 1, 1) = 4;
+
         }
-        conv.bias(b) = rand_float();
+        conv.bias(b) = 0;//rand_float();
     }
 
     conv.weights = filters;
@@ -123,7 +133,8 @@ int main(){
     // Time GPU calculation
     std::cout << "GPU calculation" << std::endl;
     auto start_gpu = std::chrono::steady_clock::now();
-    Tensor<float, 4> output = conv.forward(input);
+    // Tensor<float, 4> output = conv.forward(input);
+    Tensor<float, 4> output = conv_transpose_2d(input, conv.weights,conv.bias, 0, 1, true);
     auto end_gpu = std::chrono::steady_clock::now();
     std::chrono::duration<double> gpu_duration = end_gpu - start_gpu;
     std::cout << "GPU time: " << gpu_duration.count() << " seconds" << std::endl;
@@ -137,10 +148,10 @@ int main(){
     // }
 
     std::cout << "Checking results" << std::endl;
-    assert((output.dim(0) == 5) ? true : (printf("Mismatch in dimension 0: %d vs %d\n", output.dim(0), 5), false));
-    assert((output.dim(1) == 3) ? true : (printf("Mismatch in dimension 1: %d vs %d\n", output.dim(1), 3), false));
-    assert((output.dim(2) == 24) ? true : (printf("Mismatch in dimension 2: %d vs %d\n", output.dim(2), 24), false));
-    assert((output.dim(3) == 40) ? true : (printf("Mismatch in dimension 3: %d vs %d\n", output.dim(3), 40), false));
+    // assert((output.dim(0) == 5) ? true : (printf("Mismatch in dimension 0: %d vs %d\n", output.dim(0), 5), false));
+    // assert((output.dim(1) == 3) ? true : (printf("Mismatch in dimension 1: %d vs %d\n", output.dim(1), 3), false));
+    // assert((output.dim(2) == 24) ? true : (printf("Mismatch in dimension 2: %d vs %d\n", output.dim(2), 24), false));
+    // assert((output.dim(3) == 40) ? true : (printf("Mismatch in dimension 3: %d vs %d\n", output.dim(3), 40), false));
 
     for (int b = 0; b < batch_size; ++b) {
         for (int c = 0; c < output.dim(1); ++c) {
@@ -150,6 +161,21 @@ int main(){
                 }
             }
         }
+    }
+
+    printf("%d %d %d %d\n", output.dim(0),output.dim(1),output.dim(2),output.dim(3));
+    
+    int ans[9] = {1,4,4,6,20,16,9,24,16};
+    for(int b=0; b<batch_size; b++){
+        assert(output(b,0,0,0) == ans[0]);
+        assert(output(b,0,0,1) == ans[1]);
+        assert(output(b,0,0,2) == ans[2]);
+        assert(output(b,0,1,0) == ans[3]);
+        assert(output(b,0,1,1) == ans[4]);
+        assert(output(b,0,1,2) == ans[5]);
+        assert(output(b,0,2,0) == ans[6]);
+        assert(output(b,0,2,1) == ans[7]);
+        assert(output(b,0,2,2) == ans[8]);
     }
 
     printf("passed!\n");

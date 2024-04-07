@@ -9,6 +9,7 @@ public:
     int output_channels;
     int filter_size;
     Tensor<float, 4> weights;
+    Tensor<float, 4> input; // input should always be sitting on device as its only use in backprop
     Tensor<float, 1> bias;
 
     int padding;

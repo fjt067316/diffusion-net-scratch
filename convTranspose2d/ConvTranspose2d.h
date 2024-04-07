@@ -31,3 +31,6 @@ public:
     Tensor<float, 4> backward(Tensor<float,4> &dLdZ);
 
 };
+
+
+Tensor<float, 4> conv_transpose_2d(Tensor<float,4> &input, Tensor<float, 4> weights, Tensor<float, 1> bias, int padding=0, int stride=1, bool rotate180_weights=false);
