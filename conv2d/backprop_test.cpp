@@ -74,7 +74,7 @@ int main(){
     srand(time(0));
 
     // Define the dimensions of the tensor
-    int batch_size = 1;
+    int batch_size = 3;
     int channels = 1;
     int height = 4;//512;
     int width = 4;//768;
@@ -85,18 +85,21 @@ int main(){
     Tensor<float, 4> dLdZ(batch_size, out_channels, 3, 3 );
     Conv2d conv(channels, 1, 2, 0, 1); // in_channel, out_channel, filter_size, padding, stride
 
-    for(int i=0; i<16;i++){
-        input.data[i] = i+1;
+    for (int batch = 0; batch < batch_size; batch++) {
+        for (int i = 0; i < 16; i++) {
+            input.data[batch * 16 + i] = (i + 1);
+        }
     }
 
     for(int i=0; i<4; i++){
-        filters.data[i] = i+1;
+        filters.data[i] = (i+1);
     }
 
-    for(int i=0; i<9; i++){
-        dLdZ.data[i] = i+1;
+    for (int batch = 0; batch < batch_size; batch++) {
+        for (int i = 0; i < 9; i++) {
+            dLdZ.data[batch * 9 + i] = (i + 1);
+        }
     }
-
     // Fill the tensor with random values between -1 and 1
     // for (int b = 0; b < batch_size; ++b) {
     //     for (int c = 0; c < channels; ++c) {
