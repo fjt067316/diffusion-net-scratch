@@ -10,6 +10,7 @@ public:
     int input_channels;
     int output_channels;
     int filter_size;
+    Tensor<float, 4> input;
     Tensor<float, 4> weights;
     Tensor<float, 1> bias;
 

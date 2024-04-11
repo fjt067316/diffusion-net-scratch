@@ -1,0 +1,20 @@
+MAKE BACKPROP NOT CARRY THE WEIGHTS PER BATCH ITEM
+
+Modify filter_size to be different for height and width size in kernels
+Modify block dim widht height for kenbel launch to be different dims for width and height
+
+ADD BIAS TO CONV2D AND CONV TRANSPOSE 2D BACK PROP
+
+coalesce get_dldz_next loop in Linear layer by transposing weights
+
+make conv2d spawn a z dim thread for each batch if small enough
+
+make convTranspose2d, linear not spawn a thread for each batch if too big
+
+add use_bias flag to conv2d convtranspose kernels
+
+clean up multiple conv kernels and GetElements in cu files (one in convTranspose2d.cu the other in conv2d.cu)
+
+in get_dw in conv2d.cu -> make it dw += in; then at end dw *= dz; to factor our dz and avoid performing a multiplication every loop iteration
+
+prealloc dw, dz stuff so we dont create and lose the tensor every backprop ie mem leak

@@ -72,7 +72,7 @@ __global__ void conv_forward(float* input, float* output, float* weights, float*
                 }
             }
         }
-        int idx = getIdx(out_dims, b, c_out, y, x);
+        int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
         output[idx] = sum;
     }
 }
@@ -108,7 +108,7 @@ __global__ void conv_dldz_next(float* aug_w, float* dldz_next, float* dldz, int*
         }
     }
 
-    int idx = getIdx(next_dims, batch, in_ch, y, x);
+    int idx = getIdx(next_dims, batch, in_ch, y/stride, x/stride);
     dldz_next[idx] = sum;
     // }
     
@@ -119,6 +119,9 @@ assumes that data is already on gpu
 */
 Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     // temp
+    free(this->input.data);
+    this->input.data = input.data;
+
     float* d_in;
     cudaMalloc(&d_in, input.size * sizeof(float));
     cudaMemcpy(d_in, input.data, input.size * sizeof(float), cudaMemcpyHostToDevice);
@@ -169,6 +172,7 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
 
 // Backprop stuff below
 
+// this is correct stop looking at it
 __global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, int* dz_dim, int* out_dim, int padding, int stride){
     int x = blockIdx.x * blockDim.x + threadIdx.x; // weight index x
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -190,12 +194,13 @@ __global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, in
     int h_moves = (in_h-filter_size)/stride+1;
 
     
-
+    assert(h_moves == dz_dim[2]);
+    assert(w_moves == dz_dim[3]);
     float dw = 0;
 
 
     for(int b=0; b<batch_size; b++){
-        int dz_idx = getIdx(dz_dim, b, filter_idx, 0,0);
+        int dz_idx = getIdx(dz_dim, b, filter_idx, 0,0); // should be 1 dz for every move made 
 
         for(int i=0, y_off=0; i<h_moves; i++, y_off += stride){ 
             for(int j=0, x_off=0; j<w_moves; j++, x_off += stride, dz_idx++){
@@ -208,29 +213,11 @@ __global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, in
             int idx_y = y+y_off;
 
             float in = getElement(input, in_dim, b, channel, idx_y-padding, idx_x-padding);
-            dw += in * dZ;
+            dw += in; // maybe make it dw += in; then at end dw *= dz
             }
         }
     }
-
-    // for(int i=0, y_off=0; i<h_moves; i++, y_off += stride){
-
-    //     for(int j=0, x_off=0; j<w_moves; j++, x_off += stride, dz_idx++){
-    //         int idx_x = x+x_off;
-    //         int idx_y = y+y_off;
-    //         float dZ = dLdZ[dz_idx];
-
-    //         if(idx_x < padding || idx_y < padding || idx_x >= in_w-padding || idx_y >= in_h-padding){
-    //             continue;
-    //         }
-    //         for(int b=0; b<batch_size; b++){
-    //             float in = getElement(input, in_dim, b, channel, idx_y-padding, idx_x-padding);
-    //             dw += in * dZ;
-    //             // printf("x %d y %d in %f dz %f\n",x,y, in, dZ);
-    //         }
-    //     }
-    // }
-
+    dw *= * dZ;
     int idx = getIdx(out_dim, filter_idx, channel, y, x);
     output[idx] = dw / batch_size;
 
@@ -375,29 +362,40 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
     return output;
 }
 
-__global__ void remove_pad(float* padded_in, float* out, int* in_dim, int* out_dim, int padding){
+// __global__ void remove_pad(float* padded_in, float* out, int* in_dim, int* out_dim, int padding){
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+//     int y = blockIdx.y * blockDim.y + threadIdx.y;
+//     int in_ch = theadIdx.z;
+//     int batch = blockIdx.z;
+
+//     // we want to 
+
+//     if(x >= in_dim[3]-padding || y >= in_dim[2]-padding || batch >= in_dim[0] || in_ch >= in_dim[1] || x < padding || y < padding){
+//         return;
+//     }
+
+//     int unpad_x = x - padding;
+//     int unpad_y = y-padding;
+
+//     float* val = getElement(padded_in, in_dim, batch, in_ch, y, x);
+
+//     int idx = getIdx(in_dim, batch, in_ch, unpad_y, unpad_x);
+
+//     out[idx] = val;
+
+// }
+
+
+__global__ void apply_dw(float* weights, float* dw, int* w_dims){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int in_ch = theadIdx.z;
-    int batch = blockIdx.z;
+    int filter_ch = theadIdx.z;
+    int filter_n = blockIdx.z;
 
-    // we want to 
+    int idx = getIdx(w_dims, filter_n, filter_ch, y, x);
 
-    if(x >= in_dim[3]-padding || y >= in_dim[2]-padding || batch >= in_dim[0] || in_ch >= in_dim[1] || x < padding || y < padding){
-        return;
-    }
-
-    int unpad_x = x - padding;
-    int unpad_y = y-padding;
-
-    float* val = getElement(padded_in, in_dim, batch, in_ch, y, x);
-
-    int idx = getIdx(in_dim, batch, in_ch, unpad_y, unpad_x);
-
-    out[idx] = val;
-
+    weights[idx] -= 0.0001*dw[idx];
 }
-
 
 Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
 
@@ -415,28 +413,29 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
     // sum and average weights across mini-batch before updating weights
-    get_dw<<<blockDim, threadDim>>>(input.data, dLdZ.data, dWdZ.data, input.d_dims, dLdZ.d_dims, dWdZ.d_dims, padding, stride);
+    get_dw<<<blockDim, threadDim>>>(this->input.data, dLdZ.data, dWdZ.data, input.d_dims, dLdZ.d_dims, dWdZ.d_dims, padding, stride);
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
     // cut out padding before returning to next layer
-    assert(input.dim(2) == dLdZ_next.dim(2)-padding);
-    assert(input.dim(3) == dLdZ_next.dim(3)-padding);
+    assert(input.dim(0) == dLdZ.dim(0));
+    assert(input.dim(1) == dLdZ.dim(1));
+    assert(input.dim(2) == dLdZ_next.dim(2));
+    assert(input.dim(3) == dLdZ_next.dim(3));
 
-    asser(input.dim(0) == dLdZ.dim(0))
 
-    int batch_size = dLdZ.dim(0);
-    block_height = (int)ceil(((double)dLdZ.dim(2)) / (double)tds);  // one thread per padded input height width row 
-    block_width = (int)ceil(((double)dLdZ.dim(3)) / (double)tds);
+    // int batch_size = dLdZ.dim(0);
+    // block_height = (int)ceil(((double)dLdZ.dim(2)) / (double)tds);  // one thread per padded input height width row 
+    // block_width = (int)ceil(((double)dLdZ.dim(3)) / (double)tds);
 
-    dim3 padThreadDim(tds, tds, input_channels);
-    dim3 padBlockDim(block_width, block_height, batch_size);
+    // dim3 padThreadDim(tds, tds, input_channels);
+    // dim3 padBlockDim(block_width, block_height, batch_size);
 
-    Tensor<float, 4> unpad_dldz({input.dim(0), input.dim(1), input.dim(2), input.dim(3)}, true, true);
-    CUDA_CHECK(cudaGetLastError()); 
-    CUDA_CHECK(cudaDeviceSynchronize());
-    remove_pad<<padBlockDim, padThreadDim>>(dLdZ.data, unpad_dldz.data, dLdZ.d_dims, unpad_dldz.d_dims, padding);
-    CUDA_CHECK(cudaGetLastError()); 
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // Tensor<float, 4> unpad_dldz({input.dim(0), input.dim(1), input.dim(2), input.dim(3)}, true, true);
+    // CUDA_CHECK(cudaGetLastError()); 
+    // CUDA_CHECK(cudaDeviceSynchronize());
+    // remove_pad<<padBlockDim, padThreadDim>>(dLdZ.data, unpad_dldz.data, dLdZ.d_dims, unpad_dldz.d_dims, padding);
+    // CUDA_CHECK(cudaGetLastError()); 
+    // CUDA_CHECK(cudaDeviceSynchronize());
 
     // dWdZ.toHost();
     // input.toHost();
@@ -446,6 +445,16 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
     // printf("\n");
     // pass back 4D tensor with individual grads pre input
 
+    tds = 8; // small thread count as filters are small but filter_n is big
+    block_height = (int)ceil(((double)filter_size) / (double)tds);
+    block_width = (int)ceil(((double)filter_size) / (double)tds);
+
+    dim3 threadDimDw(tds, tds, input_channels);
+    dim3 blockDimDw(block_width, block_height, output_channels);
+
+    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims);
+    CUDA_CHECK(cudaGetLastError()); 
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     return dLdZ_next;
 
