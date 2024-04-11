@@ -1,6 +1,6 @@
 images/*
 *.o
-
+.vscode
 # Prerequisites
 *.d
 
