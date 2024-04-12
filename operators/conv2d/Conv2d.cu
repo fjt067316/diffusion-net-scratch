@@ -41,7 +41,7 @@ __host__ __device__ float getIdx(int* dims, int i, int j, int k, int l) {
 }
 
 
-__global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias = true) {
+__global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias, bool use_relu) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int c_out = blockIdx.z * blockDim.z;
@@ -72,8 +72,14 @@ __global__ void conv_forward(float* input, float* output, float* weights, float*
                 }
             }
         }
+
         int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
-        output[idx] = sum;
+        if(use_relu && sum < 0){
+            output[idx] = 0;
+        }else{
+            output[idx] = sum;
+        }
+
     }
 }
 
@@ -149,13 +155,13 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     output.data = d_out;
     // int N = 768;// out_height*out_width;
     int tds = 16; // 2d block -> 256 threads per thread block
-    int block_height = (int) ceil((512 + 2*padding) / tds);
-    int block_width = (int) ceil((768 + 2*padding) / tds);
+    int block_height = (int) ceil((height + 2*padding) / tds);
+    int block_width = (int) ceil((width + 2*padding) / tds);
 
     dim3 threadDim(tds, tds, 1);
     dim3 blockDim(block_width, block_height, output_channels);
 
-    conv_forward <<<blockDim, threadDim>>>(input.data, output.data, weights.data, bias.data, input.d_dims, output.d_dims, weights.d_dims, padding, stride);
+    conv_forward <<<blockDim, threadDim>>>(input.data, output.data, weights.data, bias.data, input.d_dims, output.d_dims, weights.d_dims, padding, stride, this->use_bias, this->use_relu);
 
     Tensor<float, 4> result(batch_size, output_channels, out_height, out_width);
 
@@ -298,7 +304,7 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
         dim3 rotBlockDim(rotTds, rotTds); // You may adjust block dimensions according to your matrix size
         dim3 rotGridDim(block_width, block_height, weights.dim(0));
         rotate180<<<rotGridDim, rotBlockDim>>>(weights.data, rot, weights.d_dims);
-        CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+        CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
         weights.data = rot;
     }
@@ -397,16 +403,44 @@ __global__ void apply_dw(float* weights, float* dw, int* w_dims){
     weights[idx] -= 0.0001*dw[idx];
 }
 
+__global__ void apply_relu(float* dLdZ, float* input, int* in_dims){
+    // 4d dLdZ because conv
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int channel = theadIdx.z;
+    int batch = blockIdx.z;
+
+    int idx = getIdx(in_dims, batch, channel, y, x);
+    float val = input[idx];
+
+    if(val < 0){
+        dLdZ[idx] = 0;
+    }else{
+        dLdZ[idx] = val;
+    }
+}
+
 Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
+
+    if(this->use_relu){ // apply relu backwards
+        int tds = 16;
+        int block_height = (int)ceil(((double)input.dim(2)) / (double)tds);
+        int block_width = (int)ceil(((double)input.dim(3)) / (double)tds);
+        int batch_size = input.dim(0);
+    
+        dim3 threadDimRelu(tds, tds, input_channels);
+        dim3 blockDimRelu(block_width, block_height, batch_size);
+        apply_relu<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, input.data, input.d_dims);
+    }
 
     Tensor<float, 1> bias({1}, false);
     Tensor<float, 4> dLdZ_next = conv_transpose_2d_dldz(this->weights, dLdZ, this->padding, this->stride, true);
     // Tensor<float, 4> dWdZ = conv_transpose_2d(dLdZ, this->input, bias, this->padding, this->stride, true);
     Tensor<float, 4> dWdZ({output_channels, input_channels, filter_size, filter_size}, true, true);
 
-    int tds = 8; // 2d block -> 256 threads per thread block
-    int block_height = (int)ceil(((double)filter_size) / (double)tds);
-    int block_width = (int)ceil(((double)filter_size) / (double)tds);
+    tds = 8; // 2d block -> 256 threads per thread block
+    block_height = (int)ceil(((double)filter_size) / (double)tds);
+    block_width = (int)ceil(((double)filter_size) / (double)tds);
 
     dim3 threadDim(tds, tds, input_channels);
     dim3 blockDim(block_width, block_height, output_channels);

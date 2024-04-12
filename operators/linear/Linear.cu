@@ -38,8 +38,12 @@ __host__ __device__ float getElement(float *arr, int* dims, int i, int j, int k,
     return arr[i * dims[1] * dims[2] * dims[3] + j * dims[2] * dims[3] + k * dims[3] + l];
 }
 
+__host__ __device__ float getIdx(int* dims, int i, int j, int k) {
+    return i * dims[1] * dims[2] + j * dims[2] + k;
+}
 
-__global__ void linear_forward(float* input, float* output, float* weights, float* bias, bool use_bias, int* in_dims, int* out_dims, int* w_dims, int* bias_dims)
+
+__global__ void linear_forward(float* input, float* output, float* weights, float* bias, bool use_bias, bool use_relu, int* in_dims, int* out_dims, int* w_dims, int* bias_dims)
     {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int batch = threadIdx.y;
@@ -59,8 +63,11 @@ __global__ void linear_forward(float* input, float* output, float* weights, floa
         
         sum = getElement(input, in_dims, batch, i) * getElement(weights, w_dims, row, i);
     }
-
-    output[batch * out_size + row] = sum;
+    if(use_relu && sum < 0){
+        output[batch * out_size + row] = 0;
+    } else {
+        output[batch * out_size + row] = sum;
+    }
 }
 
 template<typename Scalar>
@@ -108,7 +115,7 @@ Tensor<float, 2> Linear::forward(Tensor<float,2> &input){
     checkMemoryLocation(input.d_dims);
     checkMemoryLocation(weights.d_dims);
 
-    linear_forward <<<blockDim, threadDim>>>(input.data, output.data, weights.data, bias.data, this->use_bias, input.d_dims, output.d_dims, weights.d_dims, bias.d_dims);
+    linear_forward <<<blockDim, threadDim>>>(input.data, output.data, weights.data, bias.data, this->use_bias, this->use_relu, input.d_dims, output.d_dims, weights.d_dims, bias.d_dims);
 
     CUDA_CHECK(cudaGetLastError()); // Check for kernel launch errors
     CUDA_CHECK(cudaDeviceSynchronize()); // Wait for kernel to finish
@@ -165,15 +172,40 @@ __global__ void apply_dw(float* dw, float* weights, int* w_dims){
     weights[y*row_size + x] -= 0.0001*dw[y*row_size+x];
 }
 
-Tensor<float, 2> Linear::forward(Tensor<float,2> &dLdZ){
+__global__ void apply_relu_back(float* dLdZ, float* input, int* in_dims){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int batch = blockIdx.z;
 
+    int idx = getIdx(in_dims, batch, y, x);
+    float val = input[idx];
+
+    if(val < 0){
+        dLdZ[idx] = 0;
+    }else{
+        dLdZ[idx] = val;
+    }
+}
+
+Tensor<float, 2> Linear::backward(Tensor<float,2> &dLdZ){
+
+    if(this->use_relu){
+        int tds = 16;
+        int blocks_h = (int)ceil(((double)input.dim(1)) / (double)tds);
+        int blocks_w = (int)ceil(((double)input.dim(2)) / (double)tds);
+        int batch_size = input.dim(0);
+    
+        dim3 threadDimRelu(tds, tds);
+        dim3 blockDimRelu(blocks_w, blocks_h, batch_size);
+        apply_relu_back<<<blockDimRelu, threadDimRelu>>>(float* dLdZ, float* input, int* in_dims);
+    }
 
     Tensor<float, 2> dw({wights.dim(0), weights.dim(1)}, true, true);
 
     // one thread per dw
-    int tds = 16; 
-    int blocks_w = (int) ceil(this->weights.dim(1) / tds);
-    int blocks_h = (int) ceil(this->weights.dim(0) / tds);
+    tds = 16; 
+    blocks_w = (int) ceil(this->weights.dim(1) / tds);
+    blocks_h = (int) ceil(this->weights.dim(0) / tds);
 
     dim3 threadDim(tds, tds); // one thread per row of Linear layer and batch size
     dim3 blockDim(blocks_w, blocks_h);
@@ -182,7 +214,6 @@ Tensor<float, 2> Linear::forward(Tensor<float,2> &dLdZ){
 
     tds = 512; 
     blocks_w = (int) ceil(this->weights.dim(1) / tds);
-    int batch_size = this->input.dim(0);
 
     dim3 threadDimDz(tds, 1); // one thread per row of Linear layer and batch size
     dim3 blockDimDz(blocks_w, batch_size);

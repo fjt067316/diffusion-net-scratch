@@ -18,3 +18,7 @@ clean up multiple conv kernels and GetElements in cu files (one in convTranspose
 in get_dw in conv2d.cu -> make it dw += in; then at end dw *= dz; to factor our dz and avoid performing a multiplication every loop iteration
 
 prealloc dw, dz stuff so we dont create and lose the tensor every backprop ie mem leak
+
+add running mean and std for BatchNorm2d to increase inference 
+
+remove dim size asserts that just assert tensor was created with right dims ie if we assert a tensor dims we created dont

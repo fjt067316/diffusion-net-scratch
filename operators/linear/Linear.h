@@ -10,8 +10,9 @@ public:
     Tensor<float, 2> weights;
     Tensor<float, 1> bias;
     bool use_bias;
+    bool use_relu;
 
-    Linear(int input_size, int output_size, bool use_bias=false) : 
+    Linear(int input_size, int output_size, bool use_bias=false, bool use_relu=false) : 
     input_size(input_size), 
     output_size(output_size), 
     weights(output_size, input_size),

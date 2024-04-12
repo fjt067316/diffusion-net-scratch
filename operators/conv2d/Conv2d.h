@@ -14,17 +14,23 @@ public:
 
     int padding;
     int stride;
+    bool use_bias;
+    bool use_relu;
 
-    Conv2d(int input_channels, int output_channels, int filter_size, int padding=0, int stride=1) :
+    Conv2d(int input_channels, int output_channels, int filter_size, int padding=0, int stride=1, bool use_bias=true, bool use_relu=false) :
     input_channels(input_channels),
     output_channels(output_channels),
     filter_size(filter_size),
     weights({output_channels, input_channels, filter_size, filter_size}),
-    bias({output_channels}),
     padding(padding),
-    stride(stride)
+    stride(stride),
+    use_relu(use_relu)
     // Layer("conv")
-    {}
+    {
+        if (use_bias){
+            bias = Tensor<float, 1>({output_size}, true, true);
+        }
+    }
 
     Tensor<float, 4> forward(Tensor<float,4> &input);
     Tensor<float, 4> backward(Tensor<float,4> &dLdZ);
