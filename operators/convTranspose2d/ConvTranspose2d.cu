@@ -107,7 +107,7 @@ __global__ void pad_image_tranpose(float* input, float* output, int* in_dims, in
 __global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias = true) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int c_out = blockIdx.z * blockDim.z;
+    int c_out = blockIdx.z;
     
     int batch_size = in_dims[0],
        input_channels = in_dims[1],
@@ -326,25 +326,29 @@ Tensor<float, 4> ConvTranspose2d::forward(Tensor<float,4> &input){
 // }
 
 // backward stuff
-__global__ void apply_dw(float* weights, float* dw, int* w_dims){
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_ch = theadIdx.z;
-    int filter_n = blockIdx.z;
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int filter_idx = z_idx % n_filters;
+    int channel = z_idx / n_filters;
 
     int idx = getIdx(w_dims, filter_n, filter_ch, y, x);
 
     weights[idx] -= 0.0001*dw[idx];
 }
 
-__global__ void get_dwdz(float* dLdZ, float* dWdZ, float* input, int* dz_dims, int* dw_dims, int* in_dims, int padding, int stride) {
+__global__ void get_dwdz(float* dLdZ, float* dWdZ, float* input, int* dz_dims, int* dw_dims, int* in_dims, int padding, int stride, int n_filters) {
     // padding to thing we convolve over ie dl_dz
     // 3d input conv dldz for every dldz in batch
     // one thread per dWdZ element
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_idx = blockIdx.z; // filter index
-    int filter_ch = threadIdx.z;
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int filter_idx = z_idx % n_filters;
+    int channel = z_idx / n_filters;
 
     int batch_size = in_dims[0],
        input_channels = in_dims[1],
@@ -373,13 +377,15 @@ __global__ void get_dwdz(float* dLdZ, float* dWdZ, float* input, int* dz_dims, i
     dWdZ[idx] += sum / batch_size;
 }
 
-__global__ void get_dldz_next(float* dLdZ, float* weights, float* dl_dz_next, int* dz_dims, int* w_dims, int* next_dims, int padding, int stride) {
+__global__ void get_dldz_next(float* dLdZ, float* weights, float* dl_dz_next, int* dz_dims, int* w_dims, int* next_dims, int padding, int stride, int n_filters) {
     // padding to thing we convolve over ie dl_dz
     // one thread per output element 
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_idx = blockIdx.z; // filter index
-    int filter_ch = threadIdx.z;
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int filter_idx = z_idx % n_filters;
+    int channel = z_idx / n_filters;
 
     int batch_size = dl_dz_next[0],
        input_channels = dl_dz_next[1],
@@ -421,34 +427,30 @@ Tensor<float, 4> ConvTranspose2d::backward(Tensor<float,4> &dLdZ){
     int block_height = (int)ceil(((double)input_h) / (double)tds);
     int block_width = (int)ceil(((double)input_w) / (double)tds);
 
-    dim3 threadDim(tds, tds, input_channels);
-    dim3 blockDim(block_width, block_height, n_filters);
+    dim3 threadDim(64, tds, tds);
+    dim3 blockDim(n_filters*input_channels, block_height, block_width);
 
-    CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+    CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
-    get_dldz_next<<<blockDim, threadDim>>>(dLdZ.data, this->weights.data, dLdZ_next.data, dLdZ.d_dims, this->weights.d_dims, dLdZ_next.d_dims, this->padding, this->stride); 
-    CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+    get_dldz_next<<<blockDim, threadDim>>>(dLdZ.data, this->weights.data, dLdZ_next.data, dLdZ.d_dims, this->weights.d_dims, dLdZ_next.d_dims, this->padding, this->stride, n_filters); 
+    CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
     Tensor<float, 4> dWdZ({n_filters, input_channels, weights.dim(2), weights.dim(3)}, true, true);
     
-    tds = 16;
+    tds = 4; // filter width is max 4 so why not save threads
     block_height = (int)ceil(((double)weights.dim(2)) / (double)tds);
     block_width = (int)ceil(((double)weights.dim(3)) / (double)tds);
 
-    dim3 threadDimDw(tds, tds, input_channels);
-    dim3 blockDimDw(block_width, block_height, n_filters);
+    dim3 threadDimDw(64, tds, tds); // max out z dims as conv filter width/height shouldnt be over 4 
+    dim3 blockDimDw(n_filters*input_channels, block_height, block_width );
     
-    get_dwdz<<<blockDimDw, threadDimDw>>>(dLdZ.data, dWdZ.data, this->input, dLdZ.d_dims, this->weights.d_dims, this->input.d_dims, this->padding, this->stride);
-    
-    tds = 8; // small thread count as filters are small but filter_n is big
-    block_height = (int)ceil(((double)filter_size) / (double)tds);
-    block_width = (int)ceil(((double)filter_size) / (double)tds);
-
-    dim3 threadDim(tds, tds, input_channels);
-    dim3 blockDim(block_width, block_height, output_channels);
-
-    apply_dw(this->weights.data, dWdZ.data, this->weights.d_dims);
+    get_dwdz<<<blockDimDw, threadDimDw>>>(dLdZ.data, dWdZ.data, this->input, dLdZ.d_dims, this->weights.d_dims, this->input.d_dims, this->padding, this->stride, n_filters);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     return dLdZ_next;
 

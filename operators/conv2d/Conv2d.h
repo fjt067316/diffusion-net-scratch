@@ -21,11 +21,11 @@ public:
     input_channels(input_channels),
     output_channels(output_channels),
     filter_size(filter_size),
-    weights({output_channels, input_channels, filter_size, filter_size}),
+    weights({output_channels, input_channels, filter_size, filter_size}, true, true),
     padding(padding),
     stride(stride),
-    use_relu(use_relu)
-    // Layer("conv")
+    use_relu(use_relu),
+    use_bias(use_bias)
     {
         if (use_bias){
             bias = Tensor<float, 1>({output_size}, true, true);

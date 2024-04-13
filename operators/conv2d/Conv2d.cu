@@ -44,7 +44,7 @@ __host__ __device__ float getIdx(int* dims, int i, int j, int k, int l) {
 __global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias, bool use_relu) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int c_out = blockIdx.z * blockDim.z;
+    int c_out = blockIdx.z;
     
     int batch_size = in_dims[0],
        input_channels = in_dims[1],
@@ -84,12 +84,12 @@ __global__ void conv_forward(float* input, float* output, float* weights, float*
 }
 
 
-__global__ void conv_dldz_next(float* aug_w, float* dldz_next, float* dldz, int* w_dims, int* next_dims, int* dz_dims, int padding, int stride) {
+__global__ void conv_dldz_next(float* aug_w, float* dldz_next, float* dldz, int* w_dims, int* next_dims, int* dz_dims, int padding, int stride, int output_channels) {
     // one thread per dl_dz_next element (excluding batch dim)
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int in_ch = threadIdx.z;
-    int batch = blockIdx.z; // should be able to do this
+    int in_ch = blockIdx.z % output_channels;
+    int batch = blockIdx.z / output_channels; // should be able to do this 12288 < 65000
     
     // we want a 2d filter to sweep across all 3 channels and compute the 2d*2d conv on each layer
     // ie 3d input 2d weight (one filter / layer of dldz) 3d output
@@ -125,22 +125,7 @@ assumes that data is already on gpu
 */
 Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     // temp
-    free(this->input.data);
-    this->input.data = input.data;
-
-    float* d_in;
-    cudaMalloc(&d_in, input.size * sizeof(float));
-    cudaMemcpy(d_in, input.data, input.size * sizeof(float), cudaMemcpyHostToDevice);
-    float* d_weights;
-    cudaMalloc(&d_weights, this->weights.size * sizeof(float));
-    cudaMemcpy(d_weights, this->weights.data, this->weights.size * sizeof(float), cudaMemcpyHostToDevice);
-    float* d_bias;
-    cudaMalloc(&d_bias, this->bias.size * sizeof(float));
-    cudaMemcpy(d_bias, this->bias.data, this->bias.size * sizeof(float), cudaMemcpyHostToDevice);
-
-    this->bias.data = d_bias;
-    this->weights.data = d_weights;
-    input.data = d_in;
+    this->input = input;
 
     assert(input.dim(1) == this->input_channels);
     
@@ -179,11 +164,13 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
 // Backprop stuff below
 
 // this is correct stop looking at it
-__global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, int* dz_dim, int* out_dim, int padding, int stride){
-    int x = blockIdx.x * blockDim.x + threadIdx.x; // weight index x
+__global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, int* dz_dim, int* out_dim, int padding, int stride, int n_filters){
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_idx = blockIdx.z;
-    int channel = threadIdx.z;
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int filter_idx = z_idx % n_filters;
+    int channel = z_idx / n_filters;
 
 
     int filter_size = out_dim[2];
@@ -346,7 +333,7 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
     tds = 16; // 2d block -> 256 threads per thread block
     block_height = (int) ceil((double)out_height / (double)tds);
     block_width = (int) ceil((double)out_width / (double)tds);
-
+    block_depth = (int) ceil((double)out_width / (double)tds);
 
         // one thread per dl_dz_next element (excluding batch dim)
     // int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -354,12 +341,12 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
     // int in_ch = threadIdx.z;
     // int batch = blockIdx.z; // should be able to do this
     // float* aug_w, float* dldz_next, float* dldz, int* w_dims, int* next_dims, int* dz_dims, int padding, int strid
-    dim3 threadDimOut(tds, tds, output_channels);
-    dim3 blockDimOut(block_width, block_height, batch_size); // output_channel = num weights
+    dim3 threadDimOut(tds, tds, 1);
+    dim3 blockDimOut(block_width, block_height, output_channels*batch_size); // output_channel = num weights
 
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
-    conv_dldz_next<<<blockDimOut, threadDimOut>>>(tmp.data, output.data, weights.data, weights.d_dims, output.d_dims, tmp.d_dims, 0, 1);
+    conv_dldz_next<<<blockDimOut, threadDimOut>>>(tmp.data, output.data, weights.data, weights.d_dims, output.d_dims, tmp.d_dims, 0, 1, output_channels);
     // conv_forward <<<blockDimOut, threadDimOut>>>(tmp.data, output.data, weights.data, bias.data, tmp.d_dims, output.d_dims, weights.d_dims,0, 1, use_bias); // no padding argument
     CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -392,11 +379,13 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
 // }
 
 
-__global__ void apply_dw(float* weights, float* dw, int* w_dims){
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_ch = theadIdx.z;
-    int filter_n = blockIdx.z;
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int filter_idx = z_idx % n_filters;
+    int channel = z_idx / n_filters;
 
     int idx = getIdx(w_dims, filter_n, filter_ch, y, x);
 
@@ -433,21 +422,19 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
         apply_relu<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, input.data, input.d_dims);
     }
 
-    Tensor<float, 1> bias({1}, false);
     Tensor<float, 4> dLdZ_next = conv_transpose_2d_dldz(this->weights, dLdZ, this->padding, this->stride, true);
-    // Tensor<float, 4> dWdZ = conv_transpose_2d(dLdZ, this->input, bias, this->padding, this->stride, true);
     Tensor<float, 4> dWdZ({output_channels, input_channels, filter_size, filter_size}, true, true);
 
     tds = 8; // 2d block -> 256 threads per thread block
     block_height = (int)ceil(((double)filter_size) / (double)tds);
     block_width = (int)ceil(((double)filter_size) / (double)tds);
 
-    dim3 threadDim(tds, tds, input_channels);
-    dim3 blockDim(block_width, block_height, output_channels);
+    dim3 threadDim(3, tds, tds);
+    dim3 blockDim(input_channels*output_channels, block_height, block_width);
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
     // sum and average weights across mini-batch before updating weights
-    get_dw<<<blockDim, threadDim>>>(this->input.data, dLdZ.data, dWdZ.data, input.d_dims, dLdZ.d_dims, dWdZ.d_dims, padding, stride);
+    get_dw<<<blockDim, threadDim>>>(this->input.data, dLdZ.data, dWdZ.data, input.d_dims, dLdZ.d_dims, dWdZ.d_dims, padding, stride, output_channels);
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
     // cut out padding before returning to next layer
@@ -483,10 +470,10 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
     block_height = (int)ceil(((double)filter_size) / (double)tds);
     block_width = (int)ceil(((double)filter_size) / (double)tds);
 
-    dim3 threadDimDw(tds, tds, input_channels);
-    dim3 blockDimDw(block_width, block_height, output_channels);
+    dim3 threadDimDw(3, tds, tds);
+    dim3 blockDimDw( input_channels*output_channels, block_height, block_width); // move biggest dims onto block x as it can hold a fuck tonne of blocks
 
-    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims);
+    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims, output_channels);
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
 

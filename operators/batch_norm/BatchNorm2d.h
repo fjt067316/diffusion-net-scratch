@@ -8,6 +8,8 @@ public:
     float epsilon;
     Tensor<float, 1> gamma;
     Tensor<float, 1> beta;
+    Tensor<float, 1> d_gamma;
+    Tensor<float, 1> d_beta;
     Tensor<float, 1> running_mean;
     Tensor<float, 1> running_var;
     Tensor<float, 1> means;
@@ -15,17 +17,26 @@ public:
     Tensor<float, 1> vars_inv;
     Tensor<float, 4> x_norm;
     Tensor<float, 4> x_mu;
+    Tensor<float, 1> x_mu_sum;
+    Tensor<float, 1> d_mu;
+    Tensor<float, 1> d_var;
+
 
     BatchNorm2d(int out_channels, float epsilon = 1e-5) :
         out_channels(out_channels),
         epsilon(epsilon),
         gamma({out_channels}, true, true),
         beta({out_channels}, true, true),
+        d_gamma({out_channels}, true, true),
+        d_beta({out_channels}, true, true),
         running_mean({out_channels}, true, true),
         running_var({out_channels}, true, true),
         means({out_channels}, true, true),
         vars({out_channels}, true, true),
-        vars_inv({out_channels}, true, true)
+        vars_inv({out_channels}, true, true),
+        d_mu({out_channels}, true, true),
+        d_var({out_channels}, true, true),
+
 
     {
         cudaMemset(running_mean.data, 0, running_mean.size*sizeof(float));

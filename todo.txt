@@ -22,3 +22,7 @@ prealloc dw, dz stuff so we dont create and lose the tensor every backprop ie me
 add running mean and std for BatchNorm2d to increase inference 
 
 remove dim size asserts that just assert tensor was created with right dims ie if we assert a tensor dims we created dont
+
+fuse linear backprop kernels?
+
+done - !!!! Conv intput size can be like 1024 so dont use threadIdx.z instead use thread.z for batch and block.z for channel
