@@ -79,16 +79,14 @@ int main(){
     int width = 28;//768;
 
     // in_channel, out_channel, filter_size, padding, stride  bool use_bias=true, bool use_relu=false
-    printf("start\n");
     Conv2d conv1(channels, 16, 3, 0, 1, false, true); // Bx28x28->16x26,26
-    printf("hit3\n");
     BatchNorm2d bn1(16);
     Conv2d conv2(16, 32, 4, 0, 1, false, true); // 16x26,26 -> 32x23x23
     BatchNorm2d bn2(32);
-    Conv2d conv3(32, 32, 4, 2, 1, false, true); // 32x23x23 -> 32x9x9
+    Conv2d conv3(32, 32, 4, 0, 2, false, true); // 32x23x23 -> 32x10x10
 
     // int input_size, int output_size, bool use_bias=true, bool use_relu=false
-    Linear lin1(32*9*9, 256, false, true);
+    Linear lin1(32*10*10, 256, false, true);
     Linear lin2(256, 10, false, false);
     
     int iterations = 5;
@@ -125,8 +123,9 @@ int main(){
         // printf("%d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
 
         x = conv3.forward(x);
+        printf("%d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
 
-        Tensor<float, 2> flat_x({batch_size, 32*9*9}, false);
+        Tensor<float, 2> flat_x({batch_size, 32*10*10}, false);
 
         flat_x.data = x.data;
         flat_x = lin1.forward(flat_x);
@@ -162,10 +161,12 @@ int main(){
         auto dz = lin2.backward(out);
         dz = lin1.backward(dz);
 
-        Tensor<float, 4> dz_conv({batch_size, 32,9,9});
+        Tensor<float, 4> dz_conv({batch_size, 32,10,10});
         dz_conv.data = dz.data;
-
+        printf("hit 1\n");
         dz_conv = conv3.backward(dz_conv);
+        printf("hit 2\n");
+
         dz_conv = bn2.backward(dz_conv);
         dz_conv = conv2.backward(dz_conv);
         dz_conv = bn1.backward(dz_conv);
