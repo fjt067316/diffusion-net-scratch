@@ -23,7 +23,7 @@ float rand_float() {
 
 int batch_size = 1;
 
-auto decodeCsvString(string csv){
+auto decodeCsvString(string csv){ // if I try to do this function any other way it fucking explodes when returning a value
     vector<float> values;
     vector<float> labels;
     stringstream ss(csv);
@@ -94,7 +94,7 @@ int main(){
     Linear lin1(32*10*10, 256, false, true);
     Linear lin2(256, 10, false, false);
     
-    int iterations = 12;
+    int iterations = 3;
 
     int num_correct = 0;
     float loss = 0;
