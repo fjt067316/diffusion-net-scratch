@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <utility>
 #include <math.h>
+#include "../../utils/array_utils.h"
 
 #include "ConvTranspose2d.h"
 
@@ -18,27 +19,6 @@
             exit(EXIT_FAILURE); \
         } \
     } while (0)
-
-
-__host__ __device__ float getElement(float *arr, int i) {
-    return arr[i];
-}
-
-__host__ __device__ float getElement(float *arr, int* dims, int i, int j) {
-    return arr[i * dims[1] + j];
-}
-
-__host__ __device__ float getElement(float *arr, int* dims, int i, int j, int k) {
-    return arr[i * dims[1] * dims[2] + j * dims[2] + k];
-}
-
-__host__ __device__ float getElement(float *arr, int* dims, int i, int j, int k, int l) {
-    return arr[i * dims[1] * dims[2] * dims[3] + j * dims[2] * dims[3] + k * dims[3] + l];
-}
-
-__host__ __device__ float getIdx(int* dims, int i, int j, int k, int l) {
-    return i * dims[1] * dims[2] * dims[3] + j * dims[2] * dims[3] + k * dims[3] + l;
-}
 
 __global__ void rotate180(float* input, float* output, int* dims) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -174,7 +154,7 @@ might be smarter to do it on backprop for faster inference however its easier fo
 Tensor<float, 4> ConvTranspose2d::forward(Tensor<float,4> &input){
 
     assert(input.dim(1) == this->input_channels);
-    free(input.data);
+    // free(input.data);
     this->input.data = input.data;
 
     int batch_size = input.dim(0), in_channels = input.dim(1), height = input.dim(2), width = input.dim(3);
@@ -336,7 +316,7 @@ __global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
 
     int idx = getIdx(w_dims, filter_n, filter_ch, y, x);
 
-    weights[idx] -= 0.0001*dw[idx];
+    weights[idx] -= 0.000001*dw[idx];
 }
 
 __global__ void get_dwdz(float* dLdZ, float* dWdZ, float* input, int* dz_dims, int* dw_dims, int* in_dims, int padding, int stride, int n_filters) {
@@ -427,7 +407,7 @@ Tensor<float, 4> ConvTranspose2d::backward(Tensor<float,4> &dLdZ){
     int block_height = (int)ceil(((double)input_h) / (double)tds);
     int block_width = (int)ceil(((double)input_w) / (double)tds);
 
-    dim3 threadDim(64, tds, tds);
+    dim3 threadDim(3, tds, tds);
     dim3 blockDim(n_filters*input_channels, block_height, block_width);
 
     CUDA_CHECK(cudaGetLastError());
@@ -441,9 +421,10 @@ Tensor<float, 4> ConvTranspose2d::backward(Tensor<float,4> &dLdZ){
     tds = 4; // filter width is max 4 so why not save threads
     block_height = (int)ceil(((double)weights.dim(2)) / (double)tds);
     block_width = (int)ceil(((double)weights.dim(3)) / (double)tds);
+    block_z = (int)ceil(((double) n_filters*input_channels) / (double)4);
 
-    dim3 threadDimDw(64, tds, tds); // max out z dims as conv filter width/height shouldnt be over 4 
-    dim3 blockDimDw(n_filters*input_channels, block_height, block_width );
+    dim3 threadDimDw(3, tds, tds); // max out z dims as conv filter width/height shouldnt be over 4 
+    dim3 blockDimDw(block_z, block_height, block_width );
     
     get_dwdz<<<blockDimDw, threadDimDw>>>(dLdZ.data, dWdZ.data, this->input, dLdZ.d_dims, this->weights.d_dims, this->input.d_dims, this->padding, this->stride, n_filters);
     CUDA_CHECK(cudaGetLastError());

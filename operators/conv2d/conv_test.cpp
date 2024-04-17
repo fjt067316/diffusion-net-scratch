@@ -139,7 +139,7 @@ int main(){
         for (int c = 0; c < 64; ++c) {
             for (int h = 0; h < output.dim(2); ++h) {
                 for (int w = 0; w < output.dim(3); ++w) {
-                    assert((output(b, c, h, w) - out_cpu(b, c, h, w)) < 0.0001 ? true : 
+                    assert((output(b, c, h, w) - out_cpu(b, c, h, w)) < 0.000001 ? true : 
                        (printf("Mismatch at (b=%d, c=%d, h=%d, w=%d): %f vs %f\n", b, c, h, w, output(b, c, h, w), out_cpu(b, c, h, w)), false));
                     assert(output(b, c, h, w) != 0.0);          
                 }

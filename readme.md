@@ -12,7 +12,8 @@ To uninstall the CUDA Toolkit, run cuda-uninstaller in /usr/local/cuda-11.8/bin
 
 
 
-
+valgrind ./program.o
+compute-sanitizer ./program.o
 
 
 /usr/local/cuda-11.8/extras/demo_suite/deviceQuery 

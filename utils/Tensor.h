@@ -5,6 +5,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <iomanip> 
+#include <cmath>
 
 #pragma once
 
@@ -66,15 +67,8 @@ public:
         float* d_data;
         cudaMalloc(&d_data, size * sizeof(float));
         cudaMemcpy(d_data, data, size * sizeof(float), cudaMemcpyHostToDevice);
-        free(data);
+        // free(data); // this seg faults when nothing even touched the pointer and I have no idea why
         this->data = d_data;
-
-        // int* tmp;
-        // cudaMalloc(&tmp, Rank*sizeof(int));
-        // cudaMemcpy(tmp, this->dims, Rank * sizeof(int), cudaMemcpyHostToDevice);
-
-        // free(this->dims);
-        // this->dims = tmp;
 
     }
     
@@ -83,22 +77,13 @@ public:
     void toHost() {
         float *new_data = (float*)malloc(size*sizeof(float));
         cudaMemcpy(new_data, this->data, this->size*sizeof(float), cudaMemcpyDeviceToHost);
-
-        // cudaMemcpy(new_data, this->data, size*sizeof(float), cudaMemcpyDeviceToHost);
         cudaFree(this->data);
         this->data = new_data;
-
-        // int* tmp;
-        // tmp = (int*)malloc( Rank*sizeof(float));
-        // cudaMemcpy(tmp, this->dims, Rank * sizeof(float), cudaMemcpyDeviceToHost);
-
-        // cudaFree(this->dims);
-        // this->dims = tmp;
     }
 
     __host__ __device__ // allows both host and device to use same method for getting dims instead of separate device and host dim arrays
     int dim(int idx) const {
-        assert(0 <= idx && idx < int(Rank));
+        assert(0 <= idx && idx < int(Rank) ? true : (printf("idx is out of bounds: %d max %d\n", idx, Rank), false) );
 
         return dims[idx];
     }
@@ -160,17 +145,19 @@ public:
     // Method to print tensor data
     __host__ __device__
     void print() const {
-        size_t sliceSize = size / this->dim(0);
-        for (size_t i = 0; i < size; ++i) {
-            std::cout << std::setw(2) << data[i] << " "; // Adjust setw as needed
-            if ((i + 1) % sliceSize == 0 && i != 0) {
-                std::cout << std::endl;
-                if (i + 1 < size) { // Avoid printing a new line at the end
-                    std::cout << "------------------------" << std::endl;
-                }
-            }
+        int cap = std::min(static_cast<size_t>(100), size);
+        for(int i=0; i<cap;i++){
+            printf("%f ", data[i]);
         }
-        std::cout << std::endl;
+        printf("\n");
+    }
+    
+    __host__ __device__
+    void print_shape() {
+        for(int i=0; i<Rank; i++){
+            printf("%d ", dims[i]);
+        }
+        printf("\n");
     }
 };
 

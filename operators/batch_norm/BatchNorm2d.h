@@ -20,29 +20,10 @@ public:
     Tensor<float, 1> x_mu_sum;
     Tensor<float, 1> d_mu;
     Tensor<float, 1> d_var;
+    bool do_allocs;
 
 
-    BatchNorm2d(int out_channels, float epsilon = 1e-5) :
-        out_channels(out_channels),
-        epsilon(epsilon),
-        gamma({out_channels}, true, true),
-        beta({out_channels}, true, true),
-        d_gamma({out_channels}, true, true),
-        d_beta({out_channels}, true, true),
-        running_mean({out_channels}, true, true),
-        running_var({out_channels}, true, true),
-        means({out_channels}, true, true),
-        vars({out_channels}, true, true),
-        vars_inv({out_channels}, true, true),
-        d_mu({out_channels}, true, true),
-        d_var({out_channels}, true, true),
-
-
-    {
-        cudaMemset(running_mean.data, 0, running_mean.size*sizeof(float));
-        cudaMemset(running_var.data, 0, running_var.size*sizeof(float));
-        // cudaMemset(bias.data, 0, bias.size*sizeof(float));
-    }
+    BatchNorm2d(int out_channels, float epsilon = 1e-5);
 
     Tensor<float, 4> forward(Tensor<float, 4>& input);
     Tensor<float, 4> backward(Tensor<float, 4>& dLdZ);
