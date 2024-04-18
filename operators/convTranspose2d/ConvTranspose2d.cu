@@ -85,39 +85,41 @@ __global__ void pad_image_tranpose(float* input, float* output, int* in_dims, in
 
 
 __global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias = true) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int c_out = blockIdx.z;
+    
+    int output_channels = out_dims[1];
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int c_out = z_idx % output_channels;
+    int b = z_idx / output_channels;
     
     int batch_size = in_dims[0],
        input_channels = in_dims[1],
-       output_channels = out_dims[1],
        height = in_dims[2],
        width = in_dims[3],
        filter_size = w_dims[2];
 
-    if (x >= width+padding || y >= height+padding || x+filter_size-1 >= width+padding || y+filter_size-1 >= height+padding || c_out >= output_channels || (x%stride) != 0 || (y%stride) != 0){
+    if (x >= width+padding || y >= height+padding || x+filter_size-1 >= width+padding || y+filter_size-1 >= height+padding || c_out >= output_channels || (x%stride) != 0 || (y%stride) != 0 || b >= batch_size){
         return;
     }
 
     float bias_val = use_bias ? bias[c_out] : 0;
 
-    for(int b=0; b < batch_size; b++){
-        float sum = bias_val;
-        for(int c=0; c<input_channels; c++){
-            for(int row=y; row<y+filter_size; row++){
-                for(int col=x; col<x+filter_size; col++){
-                    if(row < padding || col < padding || row >= height+padding || col >= width+padding ){ // padding guard
-                        continue;
-                    } else{
-                        sum += getElement(input, in_dims, b, c, row - padding, col - padding) * getElement(weights, w_dims, c_out, c, row - y, col - x);
-                    }
+    float sum = bias_val;
+    for(int c=0; c<input_channels; c++){
+        for(int row=y; row<y+filter_size; row++){
+            for(int col=x; col<x+filter_size; col++){
+                if(row < padding || col < padding || row >= height+padding || col >= width+padding ){ // padding guard
+                    continue;
+                } else{
+                    sum += getElement(input, in_dims, b, c, row - padding, col - padding) * getElement(weights, w_dims, c_out, c, row - y, col - x);
                 }
             }
         }
-        int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
-        output[idx] = sum;
     }
+    int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
+    output[idx] = sum;
 }
 
 
@@ -209,8 +211,8 @@ Tensor<float, 4> ConvTranspose2d::forward(Tensor<float,4> &input){
     block_height = (int) ceil((double)out_height / (double)tds);
     block_width = (int) ceil((double)out_width / (double)tds);
 
-    dim3 threadDimOut(tds, tds, 1);
-    dim3 blockDimOut(block_width, block_height, output_channels); // output_channel = num weights
+    dim3 threadDimOut(3, tds, tds);
+    dim3 blockDimOut(output_channels*batch_size, block_height,block_width ); // output_channel = num weights
 
     checkMemoryLocation(tmp.data);
     checkMemoryLocation(output.data);

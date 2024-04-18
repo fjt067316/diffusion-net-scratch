@@ -68,45 +68,48 @@ Conv2d::Conv2d(int input_channels, int output_channels, int filter_size, int pad
 }
 
 __global__ void conv_forward(float* input, float* output, float* weights, float* bias, int* in_dims, int* out_dims, int* w_dims, int padding, int stride, bool use_bias, bool use_relu) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x; // x on input, y on input
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int c_out = blockIdx.z;
+    
+    int output_channels = out_dims[1];
+
+    int z_idx = blockIdx.x*blockDim.x + threadIdx.x; // we reserve x idx which can hold a lot of blocks for our longest dim
+    int c_out = z_idx % output_channels;
+    int b = z_idx / output_channels;
     
     int batch_size = in_dims[0],
        input_channels = in_dims[1],
-       output_channels = out_dims[1],
        height = in_dims[2],
        width = in_dims[3],
        filter_size = w_dims[2];
 
-    if (x >= width+padding || y >= height+padding || x+filter_size-1 >= width+padding || y+filter_size-1 >= height+padding || c_out >= output_channels || (x%stride) != 0 || (y%stride) != 0){
+    if (x >= width+padding || y >= height+padding || x+filter_size-1 >= width+padding || y+filter_size-1 >= height+padding || c_out >= output_channels || (x%stride) != 0 || (y%stride) != 0 || b >= batch_size){
         return;
     }
 
     float bias_val = use_bias ? bias[c_out] : 0;
 
-    for(int b=0; b < batch_size; b++){
-        float sum = bias_val;
-        for(int c=0; c<input_channels; c++){
-            for(int row=y; row<y+filter_size; row++){
-                for(int col=x; col<x+filter_size; col++){
-                    if(row < padding || col < padding || row >= height+padding || col >= width+padding ){ // padding guard
-                        continue;
-                    } else{
-                        sum += getElement(input, in_dims, b, c, row - padding, col - padding) * getElement(weights, w_dims, c_out, c, row - y, col - x);
-                    }
+    float sum = bias_val;
+    for(int c=0; c<input_channels; c++){
+        for(int row=y; row<y+filter_size; row++){
+            for(int col=x; col<x+filter_size; col++){
+                if(row < padding || col < padding || row >= height+padding || col >= width+padding ){ // padding guard
+                    continue;
+                } else{
+                    sum += getElement(input, in_dims, b, c, row - padding, col - padding) * getElement(weights, w_dims, c_out, c, row - y, col - x);
                 }
             }
         }
-
-        int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
-        if(use_relu && sum < 0){
-            output[idx] = 0;
-        }else{
-            output[idx] = sum;
-        }
-
     }
+
+    int idx = getIdx(out_dims, b, c_out, y/stride, x/stride);
+
+    if(use_relu && sum < 0){
+        output[idx] = 0;
+    }else{
+        output[idx] = sum;
+    }
+
 }
 
 
@@ -175,17 +178,8 @@ Tensor<float, 4> Conv2d::forward(Tensor<float,4> &input){
     int block_height = (int) ceil((double)(height + 2*padding) / tds);
     int block_width = (int) ceil((double)(width + 2*padding) / tds);
 
-    dim3 threadDim(tds, tds);
-    dim3 blockDim(block_width, block_height, output_channels);
-    // checkMemoryLocation(input.data);
-    // checkMemoryLocation(weights.data);
-    // checkMemoryLocation(output.data);
-    // test_k<<<1,1>>>(input.data, input.size );
-    // CUDA_CHECK(cudaGetLastError());
-    // CUDA_CHECK(cudaDeviceSynchronize());
-    // test_k<<<1,1>>>(input.data, input.size);
-    // test_k<<<1,1>>>(weights.data, weights.size);
-    // test_k<<<1,1>>>(output.data, output.size);
+    dim3 threadDim(3, tds, tds);
+    dim3 blockDim(output_channels*batch_size, block_height, block_width);
 
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
