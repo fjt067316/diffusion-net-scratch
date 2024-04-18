@@ -20,6 +20,7 @@ public:
     Tensor<float, 1> x_mu_sum;
     Tensor<float, 1> d_mu;
     Tensor<float, 1> d_var;
+    Tensor<float, 4> input;
     bool do_allocs;
 
 

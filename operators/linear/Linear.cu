@@ -44,7 +44,8 @@ Linear::Linear(int input_size, int output_size, bool use_bias, bool use_relu) :
     input_size(input_size), 
     output_size(output_size), 
     weights({output_size, input_size}, true, true),
-    use_bias(use_bias)
+    use_bias(use_bias),
+    use_relu(use_relu)
     {
         unsigned long long seed = 123456; // Change this to any desired seed
         unsigned long long sequence_offset = 0;
@@ -79,20 +80,20 @@ __global__ void linear_forward(float* input, float* output, float* weights, floa
     int out_size = w_dims[0];
     int in_rows = in_dims[1];
 
-
     if(row >= out_size || batch >= batch_size){
         return;
     }
 
     float sum = use_bias ? bias[row] : 0;
+    // printf("bias %f in_rows %d ", sum, in_rows);
 
     for(int i=0; i<in_rows; i++){
-        
         sum += getElement(input, in_dims, batch, i) * getElement(weights, w_dims, row, i);
     }
-    if(use_relu && sum < 0){
+    if(use_relu && (sum < 0)){
         output[batch * out_size + row] = 0;
     } else {
+        // printf("row %d sum %f", row, sum);
         output[batch * out_size + row] = sum;
     }
 }
@@ -152,8 +153,8 @@ __global__ void get_dw(float* dw, float* dz, float* in, int* w_dims, int* dz_dim
     for(int b=0; b<batch_size; b++){
         // sum += out[row]*input[batch][col]
         // assert(in_size*b+x < in_size*batch_size);
-        int input_val = in[in_size*b+x];
-        int dz_val = dz[b*dz_size+y];
+        float input_val = in[in_size*b+x];
+        float dz_val = dz[b*dz_size+y];
         sum += input_val*dz_val;
     }
 
@@ -194,8 +195,8 @@ __global__ void apply_dw(float* dw, float* weights, int* w_dims){
     }
 
     int row_size = w_dims[1];
-
-    weights[y*row_size + x] -= 0.000001*dw[y*row_size+x];
+    weights[y*row_size + x] -= 0.01*clip_to_range(dw[y*row_size+x]);
+    weights[y*row_size + x] = clip_to_range(weights[y*row_size+x], 10);
 }
 
 __global__ void apply_relu_back(float* dLdZ, float* output, int* dz_dims){
@@ -233,6 +234,7 @@ Tensor<float, 2> Linear::backward(Tensor<float,2> &dLdZ){
     }
 
     Tensor<float, 2> dw({weights.dim(0), weights.dim(1)}, true, true);
+    Tensor<float, 1> db({bias.dim(0)}, true, true);
 
     // one thread per dw
     int tds = 16; 
@@ -246,7 +248,9 @@ Tensor<float, 2> Linear::backward(Tensor<float,2> &dLdZ){
     get_dw<<<blockDim, threadDim>>>(dw.data, dLdZ.data, this->input.data, dw.d_dims, dLdZ.d_dims, this->input.d_dims);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
-
+    // dw.toHost();
+    // dw.print();
+    // dw.toDevice();
     tds = 512; 
     blocks_w = (int) ceil((double)this->weights.dim(1) / tds);
 

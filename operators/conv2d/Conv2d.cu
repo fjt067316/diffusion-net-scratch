@@ -429,7 +429,7 @@ __global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
 
     int idx = getIdx(w_dims, filter_idx, channel, y, x);
 
-    weights[idx] -= 0.000001*dw[idx];
+    weights[idx] -= 0.01*clip_to_range(dw[idx]);
 }
 
 __global__ void apply_relu(float* dLdZ, float* output, int* out_dims, int output_channels){

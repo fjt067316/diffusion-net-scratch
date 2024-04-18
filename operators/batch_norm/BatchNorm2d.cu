@@ -169,6 +169,7 @@ BatchNorm2d::BatchNorm2d(int out_channels, float epsilon) :
 Tensor<float, 4> BatchNorm2d::forward(Tensor<float,4> &input){
 
     assert(input.dim(1) == this->out_channels);
+    this->input = input;
 
     // Tensor<float, 4> x_norm({input.dim(0), input.dim(1), input.dim(2), input.dim(3)}, true, true);
     // Tensor<float, 4> x_mu({input.dim(0), input.dim(1), input.dim(2), input.dim(3)}, true, true);
@@ -248,10 +249,55 @@ Tensor<float, 4> BatchNorm2d::forward(Tensor<float,4> &input){
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    return input;
+    return input; // should return a copy as its not a &function()
 }
 
-__global__ void get_db_dg(float* dldz, float* x_norm, float* d_gamma, float* gamma, float* x_mu, float* var_inv, float* d_mu, float* d_var, float* d_beta, int* dz_dims){
+// __global__ void get_db_dg(float* dldz, float* x_norm, float* d_gamma, float* gamma, float* x_mu, float* var_inv, float* d_mu, float* d_var, float* d_beta, int* dz_dims){
+//     // this computes for a single dz in batch we still need to sum across all items in batch
+//     // we will just compute dx_norm again for dldz next to save memory
+//     int batch = threadIdx.x;
+//     int channel = blockIdx.x;
+
+//     if(batch >= dz_dims[0] || channel >= dz_dims[1]){
+//         return;
+//     }
+
+//     // int batch_size = dz_dims[0];
+//     int height = dz_dims[2];
+//     int width = dz_dims[3];
+
+//     int start = getIdx(dz_dims, batch, channel, 0, 0);
+//     float d_g = 0;
+//     float d_b = 0;
+
+//     float dvar_batch_ch = 0;
+//     float dmu_batch_ch = 0;
+//     float var_inv_ch = var_inv[channel];
+
+//     for(int i=start; i<width*height; i++){
+//         float dz = dldz[i];
+
+//         d_g += dz * x_norm[i]; 
+//         d_b += dz;
+
+//         float dx_norm = dz * gamma[channel];
+
+//         dvar_batch_ch += dx_norm * x_mu[i];
+//         dmu_batch_ch += dx_norm ; // * var_inv can be taken out of loop
+
+//     }
+
+//     // atomic add to dg db?
+//     atomicAdd(&d_gamma[channel], d_g);
+//     atomicAdd(&d_beta[channel], d_b);
+
+//     float dvar_b_c = dvar_batch_ch* -0.5*(1 / (var_inv_ch*sqrt(var_inv_ch))); // **-1.5
+//     float d_mu_partial = dmu_batch_ch * -1*var_inv_ch; //+ dvar_b_c*(1/batch_size) * x_mu_sum_ch
+//     atomicAdd(&d_var[channel], dvar_b_c);
+//     atomicAdd(&d_mu[channel], d_mu_partial);
+// }
+
+__global__ void get_db_dg_dz_next(float* dz, float* input, float* d_gamma, float* d_beta, float* dz_next, float* gamma, float* beta, float* variance, int* dz_dims){
     // this computes for a single dz in batch we still need to sum across all items in batch
     // we will just compute dx_norm again for dldz next to save memory
     int batch = threadIdx.x;
@@ -269,31 +315,16 @@ __global__ void get_db_dg(float* dldz, float* x_norm, float* d_gamma, float* gam
     float d_g = 0;
     float d_b = 0;
 
-    float dvar_batch_ch = 0;
-    float dmu_batch_ch = 0;
-    float var_inv_ch = var_inv[channel];
-
     for(int i=start; i<width*height; i++){
-        float dz = dldz[i];
-
-        d_g += dz * x_norm[i]; 
-        d_b += dz;
-
-        float dx_norm = dz * gamma[channel];
-
-        dvar_batch_ch += dx_norm * x_mu[i];
-        dmu_batch_ch += dx_norm ; // * var_inv can be taken out of loop
-
+        d_g += dz[i] * input[i];
+        d_b += dz[i];
+        dz_next[i] = dz[i] * gamma[channel] / sqrt(variance[channel] + 0.000001);
     }
 
     // atomic add to dg db?
     atomicAdd(&d_gamma[channel], d_g);
     atomicAdd(&d_beta[channel], d_b);
 
-    float dvar_b_c = dvar_batch_ch* -0.5*(1 / (var_inv_ch*sqrt(var_inv_ch))); // **-1.5
-    float d_mu_partial = dmu_batch_ch * -1*var_inv_ch; //+ dvar_b_c*(1/batch_size) * x_mu_sum_ch
-    atomicAdd(&d_var[channel], dvar_b_c);
-    atomicAdd(&d_mu[channel], d_mu_partial);
 }
 
 __global__ void get_dmu_from_partial(float* d_mu, float* d_var, float* x_mu_sum , int batch_size, int channels){
@@ -333,26 +364,28 @@ __global__ void apply_dz(float* gamma, float* beta, float* d_gamma, float* d_bet
     // printf("d_gamma ch %f\n", d_gamma[channel]);
     // printf("d_beta ch %f\n", d_beta[channel]);
 
-    gamma[channel] -= 0.000001 * d_gamma[channel];
-    beta[channel] -= 0.000001 * d_beta[channel];
+    gamma[channel] -= 0.01 * clip_to_range(d_gamma[channel]);
+    beta[channel] -= 0.01 * clip_to_range(d_beta[channel]);
 }
+
 
 Tensor<float, 4> BatchNorm2d::backward(Tensor<float, 4> &dLdZ){
     // substract means from dLdZ
     // get x_norm = normalized x and x_mu = x - mean
     // var_inv = 1/sqrt(var+1e-8)
     int batch_size = dLdZ.dim(0);
-    
-    // memset d_gamma d_beta d_mu d_var to zeros ie anything we atomic add without setting
-    cudaMemset(d_gamma.data, 0, d_gamma.size*sizeof(float));
-    cudaMemset(d_beta.data, 0, d_beta.size*sizeof(float));
-    cudaMemset(d_mu.data, 0, d_mu.size*sizeof(float));
-    cudaMemset(d_var.data, 0, d_var.size*sizeof(float));
+    assert(input.dim(0) == dLdZ.dim(0));
+    assert(input.dim(1) == dLdZ.dim(1));
+    assert(input.dim(2) == dLdZ.dim(2));
+    assert(input.dim(3) == dLdZ.dim(3));
 
     // compute dgamma dbeta dx_norm dx_centered in one kernel -> one kernel for everything?
     dim3 threadDimB(batch_size); // shouldnt exceed 1024
     dim3 blockDimC(out_channels);
-    get_db_dg<<<blockDimC, threadDimB>>>(dLdZ.data, x_norm.data, d_gamma.data, gamma.data, x_mu.data, vars_inv.data, d_mu.data, d_var.data, d_beta.data, dLdZ.d_dims);
+
+    Tensor<float, 4> dLdZ_next({dLdZ.dim(0), dLdZ.dim(1), dLdZ.dim(2), dLdZ.dim(3)}, true, true);
+    // float* dz, float* input, float* d_gamma, float* d_beta, float* dz_next, float* gamma, float* beta, int* dz_dims
+    get_db_dg_dz_next<<<blockDimC, threadDimB>>>(dLdZ.data, input.data, d_gamma.data, d_beta.data, dLdZ_next.data, gamma.data, beta.data, vars.data, dLdZ.d_dims);
 
     // dX_norm = dLdZ[ch][i]*gamma[ch]
     // dvar = 1d shape out channels = sum_over_channels(dX_norm*X_mu) * -0.5*(this->var+1e-8)**(-3/2)
@@ -360,20 +393,50 @@ Tensor<float, 4> BatchNorm2d::backward(Tensor<float, 4> &dLdZ){
 
     dim3 threadDim(out_channels); // shouldnt exceed 1024
     dim3 blockDim(1);
-    get_dmu_from_partial<<<blockDim, threadDim>>>(d_mu.data, d_var.data, x_mu_sum.data, batch_size, out_channels); // yes the batch size not num elements in batch
-
-    Tensor<float, 4> dLdZ_next({dLdZ.dim(0), dLdZ.dim(1), dLdZ.dim(2), dLdZ.dim(3)}, true, true);
-    
-    int tds = 16; // 2d block -> 256 threads per thread block
-    int block_height = (int) ceil((dLdZ.dim(2)) / tds);
-    int block_width = (int) ceil((dLdZ.dim(3)) / tds);
-
-    dim3 threadDimDz(tds, tds, 1);
-    dim3 blockDimDz(block_width, block_height, out_channels*batch_size);
-    get_dldz_next<<<blockDimDz, threadDimDz>>>(dLdZ_next.data, dLdZ.data, gamma.data, vars_inv.data, d_mu.data, d_var.data, x_mu.data, dLdZ_next.d_dims, out_channels, batch_size);
 
     // apply d_gamma d_beta
     apply_dz<<<blockDim, threadDim>>>(gamma.data, beta.data, d_gamma.data, d_beta.data, out_channels);
 
     return dLdZ_next;
 }
+
+// Tensor<float, 4> BatchNorm2d::backward(Tensor<float, 4> &dLdZ){
+//     // substract means from dLdZ
+//     // get x_norm = normalized x and x_mu = x - mean
+//     // var_inv = 1/sqrt(var+1e-8)
+//     int batch_size = dLdZ.dim(0);
+    
+//     // memset d_gamma d_beta d_mu d_var to zeros ie anything we atomic add without setting
+//     cudaMemset(d_gamma.data, 0, d_gamma.size*sizeof(float));
+//     cudaMemset(d_beta.data, 0, d_beta.size*sizeof(float));
+//     cudaMemset(d_mu.data, 0, d_mu.size*sizeof(float));
+//     cudaMemset(d_var.data, 0, d_var.size*sizeof(float));
+
+//     // compute dgamma dbeta dx_norm dx_centered in one kernel -> one kernel for everything?
+//     dim3 threadDimB(batch_size); // shouldnt exceed 1024
+//     dim3 blockDimC(out_channels);
+//     get_db_dg<<<blockDimC, threadDimB>>>(dLdZ.data, x_norm.data, d_gamma.data, gamma.data, x_mu.data, vars_inv.data, d_mu.data, d_var.data, d_beta.data, dLdZ.d_dims);
+
+//     // dX_norm = dLdZ[ch][i]*gamma[ch]
+//     // dvar = 1d shape out channels = sum_over_channels(dX_norm*X_mu) * -0.5*(this->var+1e-8)**(-3/2)
+//     // dmu = 1d shape out channels = sum_over_channels(dX_norm*-var_inv)
+
+//     dim3 threadDim(out_channels); // shouldnt exceed 1024
+//     dim3 blockDim(1);
+//     get_dmu_from_partial<<<blockDim, threadDim>>>(d_mu.data, d_var.data, x_mu_sum.data, batch_size, out_channels); // yes the batch size not num elements in batch
+
+//     Tensor<float, 4> dLdZ_next({dLdZ.dim(0), dLdZ.dim(1), dLdZ.dim(2), dLdZ.dim(3)}, true, true);
+    
+//     int tds = 16; // 2d block -> 256 threads per thread block
+//     int block_height = (int) ceil((dLdZ.dim(2)) / tds);
+//     int block_width = (int) ceil((dLdZ.dim(3)) / tds);
+
+//     dim3 threadDimDz(tds, tds, 1);
+//     dim3 blockDimDz(block_width, block_height, out_channels*batch_size);
+//     get_dldz_next<<<blockDimDz, threadDimDz>>>(dLdZ_next.data, dLdZ.data, gamma.data, vars_inv.data, d_mu.data, d_var.data, x_mu.data, dLdZ_next.d_dims, out_channels, batch_size);
+
+//     // apply d_gamma d_beta
+//     apply_dz<<<blockDim, threadDim>>>(gamma.data, beta.data, d_gamma.data, d_beta.data, out_channels);
+
+//     return dLdZ_next;
+// }

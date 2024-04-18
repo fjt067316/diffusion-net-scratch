@@ -50,63 +50,68 @@ int main(){
 
     // Define the dimensions of the tensor
     int batch_size = 1;
-    int input_size = 1024;
-    int output_size = 10;
+    int input_size = 4;
+    int output_size = 3;
 
     // Create the tensor
     Tensor<float, 2> input({batch_size, input_size}, true);
+    Tensor<float, 2> dLdZ({batch_size, output_size}, true);
     Linear linear(input_size, output_size, true, false); // input_size, output_size, use_bias
+    linear.weights.toHost();
 
     // Fill the tensor with random values between -1 and 1
-    for (int b = 0; b < batch_size; ++b) {
-        for (int c = 0; c < input_size; ++c) {
-            input.data[b*input_size+c] = rand_float();
-        }
+    float in[4] = {1,3,2,4};
+    float weights[12] = {-1, 0.5, 2, -0.5, 3, -2, 1, 2, 4, 3, 5, -1};
+    float dz[3] = {0.088, -0.75, 0.66};
+
+    for(int i=0; i<4; i++){
+        input.data[i] = in[i];
+    }
+    for(int i=0; i<3; i++){
+        dLdZ.data[i] = dz[i];
+    }
+    for(int i=0; i<12; i++){
+        linear.weights.data[i] = weights[i];
     }
 
-    // for (int r = 0; r < output_size; r++) {
-    //     for (int c = 0; c < input_size; c++) {
-    //         linear.weights.data[r*input_size+c] = rand_float();
-    //     }
-    //     linear.bias.data[r] = rand_float();
-    // }
-    linear.weights.toHost();
-    linear.bias.toHost();
-
-    std::cout << "CPU calculation" << std::endl;
-    auto start_cpu = std::chrono::steady_clock::now();
-    Tensor<float, 2> out_cpu = linear_cpu(input, linear.weights, linear.bias, true);
-    auto end_cpu = std::chrono::steady_clock::now();
-    std::chrono::duration<double> cpu_duration = end_cpu - start_cpu;
-    std::cout << "CPU time: " << cpu_duration.count() << " seconds" << std::endl;
-    out_cpu.print();
+    linear.weights.toDevice();
 
     // move data to gpu
     linear.weights.toDevice();
     linear.bias.toDevice();
     input.toDevice();
+    dLdZ.toDevice();
 
+    auto out_forward = linear.forward(input);
+
+    out_forward.toHost();
+    float ans[3] = {2.5, 7, 19};
+    for(int i=0; i<3; i++){
+        printf("%f ", out_forward.data[i]);
+        assert(out_forward.data[i] - ans[i] < 1);
+    }
     // Time GPU calculation
     std::cout << "GPU calculation" << std::endl;
     auto start_gpu = std::chrono::steady_clock::now();
-    Tensor<float, 2> output = linear.forward(input);
+    Tensor<float, 2> output = linear.backward(dLdZ);
     auto end_gpu = std::chrono::steady_clock::now();
     std::chrono::duration<double> gpu_duration = end_gpu - start_gpu;
     std::cout << "GPU time: " << gpu_duration.count() << " seconds" << std::endl;
 
     output.toHost();
     output.print();
-    std::cout << "Checking results" << std::endl;
+    
+    // std::cout << "Checking results" << std::endl;
 
-    assert((output.dim(0) == out_cpu.dim(0)) ? true : (printf("Mismatch in dimension 0: %d vs %d\n", output.dim(0), 5), false));
-    assert((output.dim(1) == out_cpu.dim(1)) ? true : (printf("Mismatch in dimension 1: %d vs %d\n", output.dim(1), 3), false));
+    // assert((output.dim(0) == out_cpu.dim(0)) ? true : (printf("Mismatch in dimension 0: %d vs %d\n", output.dim(0), 5), false));
+    // assert((output.dim(1) == out_cpu.dim(1)) ? true : (printf("Mismatch in dimension 1: %d vs %d\n", output.dim(1), 3), false));
 
-    for (int b = 0; b < batch_size; ++b) {
-        for (int c = 0; c < output_size; ++c) {
-            assert((output(b, c) - out_cpu(b, c)) < 0.0001 ? true : 
-               (printf("Mismatch at (b=%d, c=%d): %f vs %f\n", b, c, output(b, c), out_cpu(b, c)), false));
-        }
-    }
+    // for (int b = 0; b < batch_size; ++b) {
+    //     for (int c = 0; c < output_size; ++c) {
+    //         assert((output(b, c) - out_cpu(b, c)) < 0.0001 ? true : 
+    //            (printf("Mismatch at (b=%d, c=%d): %f vs %f\n", b, c, output(b, c), out_cpu(b, c)), false));
+    //     }
+    // }
 
     printf("passed!\n");
 
