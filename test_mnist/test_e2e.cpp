@@ -29,7 +29,8 @@ auto decodeCsvString(string csv){ // if I try to do this function any other way 
     stringstream ss(csv);
     string item;
     while (getline(ss, item, ',')) {
-        values.push_back(std::stoi(item)); // simulate 3 in channels
+        float val = 2*(std::stof(item) / 255)-1;
+        values.push_back(val); // simulate 3 in channels
     }
     labels.push_back(values.front()); // correct image value
     values.erase(values.begin());
@@ -58,6 +59,34 @@ Tensor<float, 2> softmax(Tensor<float, 2> logits) {
     return logits;
 }
 
+Tensor<float, 2> avg_probs(Tensor<float, 2> logits) {
+    float sum = 0;
+    float min_n = 0;
+
+    for (size_t i = 0; i < 10; ++i) {
+        min_n = min(min_n, logits.data[i]);
+    }
+
+    for (size_t i = 0; i < 10; ++i) {
+        logits.data[i] = logits.data[i]-min_n;
+        sum += logits.data[i];
+    }
+
+    for (size_t i = 0; i < 10; ++i) {
+        logits.data[i] /= (sum+0.000001);
+    }
+    return logits;
+}
+
+void scale_tensor(Tensor<float, 2> &input){
+    float max_n = 0;
+    for(int i=0; i<input.size; i++){
+        max_n = max(max_n, input.data[i]);
+    }
+    for(int i=0; i<input.size; i++){
+        input.data[i] /= max_n;
+    }
+}
 
 /*
 CPU time: 439.001 seconds
@@ -92,9 +121,10 @@ int main(){
 
     // int input_size, int output_size, bool use_bias=true, bool use_relu=false
     Linear lin1(32*10*10, 256, false, true);
+
     Linear lin2(256, 10, false, false);
     
-    int iterations = 3;
+    int iterations = 10000;
 
     int num_correct = 0;
     float loss = 0;
@@ -104,19 +134,15 @@ int main(){
     for(int n=0; n<iterations; n++){
         row.erase();
         getline(inputFile, row);
-        printf("hit1\n");
 
         auto data_pair = decodeCsvString(row); // input = (784)
         vector<float> input = data_pair.first;
         vector<float> labels = data_pair.second;
-        printf("hit2\n");
 
         input_tensor.data = input.data();
         input_tensor.toDevice();
-        printf("hit3\n");
 
         auto x = conv1.forward(input_tensor);
-        printf("hit4\n");
 
         // printf("conv1 %d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
 
@@ -127,21 +153,27 @@ int main(){
         // printf("conv2 %d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
 
         x = bn2.forward(x);
-
-        // printf("%d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
-
-        x = conv3.forward(x);
         // x.toHost();
         // x.print();
         // x.toDevice();
+        // printf("%d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
+
+        x = conv3.forward(x);
+
         Tensor<float, 2> flat_x({batch_size, 32*10*10}, false);
 
         flat_x.data = x.data;
-        // flat_x.toHost();
-        // flat_x.print();
-        // flat_x.toDevice();
-        flat_x = lin1.forward(flat_x);
 
+        flat_x = lin1.forward(flat_x);
+        // flat_x.toHost();
+        // scale_tensor(flat_x);
+        // flat_x.print();
+
+        // lin2.weights.toHost();
+        // lin2.weights.print();
+        // lin2.weights.toDevice();
+
+        // flat_x.toDevice();
         Tensor<float, 2> out = lin2.forward(flat_x);
 
         // out.toHost();
@@ -149,24 +181,30 @@ int main(){
         int correct_idx = labels[0];
 
         out.toHost();
+        printf("out vals ");
+        out.print();
         // Compute softmax
-        auto predictions = softmax(out);
+        // auto predictions = softmax(out);
+        auto predictions = avg_probs(out);
         predictions.print();
-        printf("loss %f\n", -1*std::log(predictions.data[correct_idx]));
+        printf("loss %f\n", -1*std::log(predictions.data[correct_idx]+0.00000001));
 
-        float dLdZ_correct = predictions.data[correct_idx] - 1;
+        // float dLdZ_correct = predictions.data[correct_idx] - 1;
         for (int i = 0; i < out.size; i++) {
             if (i == correct_idx) {
-                out.data[i] = predictions.data[i] - 1;
+                out.data[i] = predictions.data[i]-1;
             } else {
                 out.data[i] = predictions.data[i];
             }
         }       
-
+        // float dz_idx_val = out.data[correct_idx];
         // Scale the gradients by dL/dZ for the correct class
-        for (int i = 0; i < out.size; i++) {
-            out.data[i] *= -1;
-        }
+        // for (int i = 0; i < out.size; i++) {
+        //     out.data[i] *= dz_idx_val;
+        // }
+        // printf("grads ");
+        out.print();
+
         // float label_prob = out.data[correct_idx];
         // float exp_label = std::exp( out.data[correct_idx]);
 
@@ -191,23 +229,34 @@ int main(){
         // }
 
         // out.data[correct_idx] = dz_exp[correct_idx] * (sum_exp-dz_exp[correct_idx]) / (sum_exp*sum_exp);
-        // out.print();
         out.toDevice();
 
         auto dz = lin2.backward(out);
 
         dz = lin1.backward(dz);
 
+        // lin1.weights.toHost();
+        // lin1.weights.print();
+        // lin1.weights.toDevice();
+
         Tensor<float, 4> dz_conv({batch_size, 32,10,10}, false);
 
         dz_conv.data = dz.data;
 
         dz_conv = conv3.backward(dz_conv);
-
+        // dz_conv.toHost();
+        // dz_conv.print();
+        // dz_conv.toDevice();
         dz_conv = bn2.backward(dz_conv);
+
         dz_conv = conv2.backward(dz_conv);
+        // conv2.weights.toHost();
+        // conv2.weights.print();
+        // conv2.weights.toDevice();
         dz_conv = bn1.backward(dz_conv);
+
         dz_conv = conv1.backward(dz_conv);
+
 
         // model->forward(image_1x28x28, image_label, &loss);
     }
