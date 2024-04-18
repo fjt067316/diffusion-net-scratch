@@ -364,8 +364,12 @@ __global__ void apply_dz(float* gamma, float* beta, float* d_gamma, float* d_bet
     // printf("d_gamma ch %f\n", d_gamma[channel]);
     // printf("d_beta ch %f\n", d_beta[channel]);
 
-    gamma[channel] -= 0.01 * clip_to_range(d_gamma[channel]);
-    beta[channel] -= 0.01 * clip_to_range(d_beta[channel]);
+    gamma[channel] -= 0.0001 * clip_to_range(d_gamma[channel], 10);
+    beta[channel] -= 0.0001 * clip_to_range(d_beta[channel], 10);
+
+    gamma[channel] = clip_to_range(gamma[channel], 1);
+    beta[channel] = clip_to_range(beta[channel], 1);
+
 }
 
 

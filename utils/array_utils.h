@@ -58,9 +58,9 @@ void inline fill_rand(float* arr, int size) {
 }
 
 __host__ __device__ inline float clip_to_range(float value, int factor=1) {
-    if (value < -1.0f*factor) {
+    if (value < (-1.0f*factor)) {
         return -1.0f*factor;
-    } else if (value > 1.0f*factor) {
+    } else if (value > (1.0f*factor)) {
         return 1.0f*factor;
     } else {
         return value;

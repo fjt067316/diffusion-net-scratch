@@ -45,13 +45,15 @@ Linear::Linear(int input_size, int output_size, bool use_bias, bool use_relu) :
     output_size(output_size), 
     weights({output_size, input_size}, true, true),
     use_bias(use_bias),
-    use_relu(use_relu)
+    use_relu(use_relu),
+    dw({output_size, input_size}, true, true)
     {
         unsigned long long seed = 123456; // Change this to any desired seed
         unsigned long long sequence_offset = 0;
 
         if (use_bias){
             bias = Tensor<float, 1>({output_size}, true, true);
+            db = Tensor<float, 1>({output_size}, true, true);
             // int grid = (int) ceil((double)(bias.size) / 256);
             // fill_rand<<<grid, 256>>>(bias.data, bias.size, seed, sequence_offset);
             float bias_vals[bias.size];
@@ -150,6 +152,7 @@ __global__ void get_dw(float* dw, float* dz, float* in, int* w_dims, int* dz_dim
     float sum = 0;
     int in_size = in_dims[1];
     int dz_size = dz_dims[1];
+
     for(int b=0; b<batch_size; b++){
         // sum += out[row]*input[batch][col]
         // assert(in_size*b+x < in_size*batch_size);
@@ -186,7 +189,7 @@ __global__ void get_dldz_next(float* dz_next, float* dz, float* weights, int* ne
     dz_next[w_row_size*batch+in_col] = sum; // dz_next[b][in_col] = w*dz
 }
 
-__global__ void apply_dw(float* dw, float* weights, int* w_dims){
+__global__ void apply_dw(float* dw, float* weights, int* w_dims, float lr){
     int x = blockIdx.x*blockDim.x+threadIdx.x;
     int y = blockIdx.y*blockDim.y+threadIdx.y;
 
@@ -195,23 +198,41 @@ __global__ void apply_dw(float* dw, float* weights, int* w_dims){
     }
 
     int row_size = w_dims[1];
-    weights[y*row_size + x] -= 0.01*clip_to_range(dw[y*row_size+x]);
-    weights[y*row_size + x] = clip_to_range(weights[y*row_size+x], 10);
+    weights[y*row_size + x] -= lr*clip_to_range(dw[y*row_size+x], 10);
+    weights[y*row_size + x] = clip_to_range(weights[y*row_size+x], 1);
 }
 
-__global__ void apply_relu_back(float* dLdZ, float* output, int* dz_dims){
+__global__ void apply_db(float* db, float* bias, int* b_dims, int batch_size, float lr){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(x >= b_dims[0]){
+        return;
+    }
+
+    bias[x] -= lr*clip_to_range(db[x]/batch_size, 10);
+    bias[x] = clip_to_range(db[x], 1);
+}
+
+__global__ void apply_relu_back_get_db(float* dLdZ, float* output, float* db, int* dz_dims, bool use_bias, bool use_relu){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int batch = blockIdx.y;
 
     if(x >= dz_dims[1] || batch >= dz_dims[0]){
         return;
     }
-
+    
     int idx = getIdx(dz_dims, batch, x);
-    float val = output[idx];
 
-    if(val <= 0){ // should just be == 0 not <= 0 but whatevs
-        dLdZ[idx] = 0;
+    if(use_relu){
+        float val = output[idx];
+
+        if(val <= 0){ // should just be == 0 not <= 0 but whatevs
+            dLdZ[idx] = 0;
+        }
+    }
+
+    if(use_bias){
+        atomicAdd(&db[x], dLdZ[idx]);
     }
 }
 
@@ -220,21 +241,19 @@ Tensor<float, 2> Linear::backward(Tensor<float,2> &dLdZ){
     
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
+    cudaMemset(db.data, 0, db.size*sizeof(float));
 
-    if(this->use_relu){
+    if(this->use_relu || this->use_bias){
         int tds = 32;
         int blocks_h = (int)ceil(((double)dLdZ.dim(1)) / (double)tds);
         // int blocks_w = (int)ceil(((double)dLdZ.dim(2)) / (double)tds);
-    
+
         dim3 threadDimRelu(tds);
         dim3 blockDimRelu(blocks_h, batch_size);
-        apply_relu_back<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, output.data, output.d_dims);
+        apply_relu_back_get_db<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, output.data, db.data, output.d_dims, this->use_bias, this->use_relu);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
-
-    Tensor<float, 2> dw({weights.dim(0), weights.dim(1)}, true, true);
-    Tensor<float, 1> db({bias.dim(0)}, true, true);
 
     // one thread per dw
     int tds = 16; 
@@ -269,9 +288,16 @@ Tensor<float, 2> Linear::backward(Tensor<float,2> &dLdZ){
     dim3 threadDimDw(tds, tds); // one thread per row of Linear layer and batch size
     dim3 blockDimDw(blocks_w, batch_size);
 
-    apply_dw<<<blockDimDw, threadDimDw>>>(dw.data, weights.data, weights.d_dims);
+    apply_dw<<<blockDimDw, threadDimDw>>>(dw.data, weights.data, weights.d_dims, this->learning_rate);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
+    if(this->use_bias){
+        int grids = (int) ceil((double)this->weights.dim(0) / 256);
+        apply_db<<<grids, 512>>>(db.data, bias.data, bias.d_dims, batch_size, this->learning_rate);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
     // cudaFree(input.data);
     // cudaFree(output.data);
     return dLdZ_next;

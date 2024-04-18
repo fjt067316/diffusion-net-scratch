@@ -52,6 +52,7 @@ Conv2d::Conv2d(int input_channels, int output_channels, int filter_size, int pad
 
         if (use_bias){
             bias = Tensor<float, 1>({output_channels}, true, true);
+            db = Tensor<float, 1>({output_channels}, true, true);
 
             int grid = (int) ceil((double)(bias.size) / 256);
             fill_rand<<<grid, 256>>>(bias.data, bias.size, seed, sequence_offset);
@@ -149,12 +150,12 @@ __global__ void conv_dldz_next(float* aug_w, float* dldz_next, float* dldz, int*
     
 }
 
-__global__ void test_k(float* in, int size){
-    for(int i=0; i<size; i++){
-        // printf("idx %d val %f\n", i, in[i]);
-        in[i] = in[i] + 1;
-    }
-}
+// __global__ void test_k(float* in, int size){
+//     for(int i=0; i<size; i++){
+//         // printf("idx %d val %f\n", i, in[i]);
+//         in[i] = in[i] + 1;
+//     }
+// }
 /*
 assumes that data is already on gpu
 */
@@ -251,139 +252,139 @@ __global__ void get_dw(float* input, float* dLdZ, float* output, int* in_dim, in
 
 }
 
-__global__ void rotate180(float* input, float* output, int* dims) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int filter_idx = blockIdx.z;
+// __global__ void rotate180(float* input, float* output, int* dims) {
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+//     int y = blockIdx.y * blockDim.y + threadIdx.y;
+//     int filter_idx = blockIdx.z;
 
 
-    int height = dims[2];
-    int width = dims[3];
-    int num_channels = dims[1];
+//     int height = dims[2];
+//     int width = dims[3];
+//     int num_channels = dims[1];
 
-    if (x < width && y < height) {
-        int in_index = filter_idx * width * height * num_channels + y * width + x;
-        int out_index = filter_idx * width * height * num_channels + (height - y - 1) * width + (width - x - 1);
-        output[out_index] = input[in_index];
-    }
-}
+//     if (x < width && y < height) {
+//         int in_index = filter_idx * width * height * num_channels + y * width + x;
+//         int out_index = filter_idx * width * height * num_channels + (height - y - 1) * width + (width - x - 1);
+//         output[out_index] = input[in_index];
+//     }
+// }
 
 
 
-__global__ void pad_image_tranpose(float* input, float* output, int* in_dims, int* out_dims, int z, int pp){
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    // int c_out = blockIdx.z * blockDim.z;
-    int b = blockIdx.z;
+// __global__ void pad_image_tranpose(float* input, float* output, int* in_dims, int* out_dims, int z, int pp){
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+//     int y = blockIdx.y * blockDim.y + threadIdx.y;
+//     // int c_out = blockIdx.z * blockDim.z;
+//     int b = blockIdx.z;
 
-    int batch_size = in_dims[0],
-        input_channels = in_dims[1],
-        output_channels = out_dims[1],
-        out_h = out_dims[2],
-        out_w = out_dims[3];
+//     int batch_size = in_dims[0],
+//         input_channels = in_dims[1],
+//         output_channels = out_dims[1],
+//         out_h = out_dims[2],
+//         out_w = out_dims[3];
 
-    assert(input_channels == output_channels);
+//     assert(input_channels == output_channels);
 
-    if(x >= out_w || y >= out_h || b >= batch_size){
-        return;
-    }
+//     if(x >= out_w || y >= out_h || b >= batch_size){
+//         return;
+//     }
 
-    // check if output index should have an input value copied or be filled with zeros
-    int x_valid = (x-pp) % (z+1);
-    int y_valid = (y-pp) % (z+1);
+//     // check if output index should have an input value copied or be filled with zeros
+//     int x_valid = (x-pp) % (z+1);
+//     int y_valid = (y-pp) % (z+1);
 
-    int idx = getIdx(out_dims, b, 0, y, x);
-    int off = out_h*out_w;
-    // zeros condition
-    if(x < pp || y < pp || x >= out_w-pp || y >= out_h-pp || x_valid != 0 || y_valid != 0){
-        for(int i=0; i<input_channels; i++){
-            output[idx+i*off] = 0;
-        }
-        return;
-    }
+//     int idx = getIdx(out_dims, b, 0, y, x);
+//     int off = out_h*out_w;
+//     // zeros condition
+//     if(x < pp || y < pp || x >= out_w-pp || y >= out_h-pp || x_valid != 0 || y_valid != 0){
+//         for(int i=0; i<input_channels; i++){
+//             output[idx+i*off] = 0;
+//         }
+//         return;
+//     }
 
-    // else fill with input value 
-    int in_x = (x-pp) / (z+1);
-    int in_y = (y-pp) / (z+1);
-    // printf("row %d col %d val %d", in_y, in_x, getElement(input, in_dims, b, c_out, in_y, in_x));
-    for(int i=0; i<input_channels; i++){
-        // printf("added %f from %d %d to %d %d\n",getElement(input, in_dims, b, i, in_y, in_x), in_y, in_x, y, x );
-        output[idx + i*off] = getElement(input, in_dims, b, i, in_y, in_x); 
+//     // else fill with input value 
+//     int in_x = (x-pp) / (z+1);
+//     int in_y = (y-pp) / (z+1);
+//     // printf("row %d col %d val %d", in_y, in_x, getElement(input, in_dims, b, c_out, in_y, in_x));
+//     for(int i=0; i<input_channels; i++){
+//         // printf("added %f from %d %d to %d %d\n",getElement(input, in_dims, b, i, in_y, in_x), in_y, in_x, y, x );
+//         output[idx + i*off] = getElement(input, in_dims, b, i, in_y, in_x); 
 
-    }
-}
+//     }
+// }
 
-Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4> dLdZ, Tensor<float, 1> bias, int out_height, int out_width, int padding, int stride, bool rotate180_weights, bool use_bias = false){
+// Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4> dLdZ, Tensor<float, 1> bias, int out_height, int out_width, int padding, int stride, bool rotate180_weights, bool use_bias = false){
 
-    if(rotate180_weights){
-        float* rot;
-        cudaMalloc(&rot, dLdZ.size*sizeof(float));
+//     if(rotate180_weights){
+//         float* rot;
+//         cudaMalloc(&rot, dLdZ.size*sizeof(float));
 
-        int rotTds = 16; // 2d block -> 256 threads per thread block
-        int block_height = (int)ceil((double)dLdZ.dim(2) / (double)rotTds);
-        int block_width = (int)ceil((double)dLdZ.dim(3) / (double)rotTds);
+//         int rotTds = 16; // 2d block -> 256 threads per thread block
+//         int block_height = (int)ceil((double)dLdZ.dim(2) / (double)rotTds);
+//         int block_width = (int)ceil((double)dLdZ.dim(3) / (double)rotTds);
 
-        dim3 rotBlockDim(rotTds, rotTds); // You may adjust block dimensions according to your matrix size
-        dim3 rotGridDim(block_width, block_height, dLdZ.dim(0));
-        rotate180<<<rotGridDim, rotBlockDim>>>(dLdZ.data, rot, dLdZ.d_dims);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
-        dLdZ.data = rot;
-    }
+//         dim3 rotBlockDim(rotTds, rotTds); // You may adjust block dimensions according to your matrix size
+//         dim3 rotGridDim(block_width, block_height, dLdZ.dim(0));
+//         rotate180<<<rotGridDim, rotBlockDim>>>(dLdZ.data, rot, dLdZ.d_dims);
+//         CUDA_CHECK(cudaGetLastError());
+//         CUDA_CHECK(cudaDeviceSynchronize());
+//         dLdZ.data = rot;
+//     }
 
-    int batch_size = dLdZ.dim(0),  in_channels = input.dim(1), height = input.dim(2), width = input.dim(3), filter_size = dLdZ.dim(2);
-    int output_channels = dLdZ.dim(0);
-    // insert z zeros between input vals and pp zeros around edge
-    int z = stride-1;
-    int pp = filter_size-padding-1;
+//     int batch_size = dLdZ.dim(0),  in_channels = input.dim(1), height = input.dim(2), width = input.dim(3), filter_size = dLdZ.dim(2);
+//     int output_channels = dLdZ.dim(0);
+//     // insert z zeros between input vals and pp zeros around edge
+//     int z = stride-1;
+//     int pp = filter_size-padding-1;
 
-    // create temp input to perform conv on because I dont want to do weird atomic add transpose thing
-    int h_tmp = 2*pp+z*(height-1) + height;
-    int w_tmp = 2*pp+z*(width-1) + width;
+//     // create temp input to perform conv on because I dont want to do weird atomic add transpose thing
+//     int h_tmp = 2*pp+z*(height-1) + height;
+//     int w_tmp = 2*pp+z*(width-1) + width;
 
-    // create and pad tmp array
-    Tensor<float, 4> tmp({batch_size, in_channels, h_tmp, w_tmp}, true, true);
+//     // create and pad tmp array
+//     Tensor<float, 4> tmp({batch_size, in_channels, h_tmp, w_tmp}, true, true);
 
-    int tds = 16; // 2d block -> 256 threads per thread block
-    int block_height = (int)ceil(((double)h_tmp) / (double)tds);
-    int block_width = (int)ceil(((double)w_tmp) / (double)tds);
+//     int tds = 16; // 2d block -> 256 threads per thread block
+//     int block_height = (int)ceil(((double)h_tmp) / (double)tds);
+//     int block_width = (int)ceil(((double)w_tmp) / (double)tds);
 
-    dim3 threadDim(tds, tds, 1);
-    dim3 blockDim(block_width, block_height, batch_size);
+//     dim3 threadDim(tds, tds, 1);
+//     dim3 blockDim(block_width, block_height, batch_size);
 
-    CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
-    CUDA_CHECK(cudaDeviceSynchronize());
+//     CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+//     CUDA_CHECK(cudaDeviceSynchronize());
 
-    pad_image_tranpose<<<blockDim, threadDim>>>(input.data, tmp.data, input.d_dims, tmp.d_dims, z, pp);
+//     pad_image_tranpose<<<blockDim, threadDim>>>(input.data, tmp.data, input.d_dims, tmp.d_dims, z, pp);
 
-    CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
-    CUDA_CHECK(cudaDeviceSynchronize());
-    // create output array for convolution
-    // int out_height = (height-1) * stride + filter_size-2*padding;
-    // int out_width = (width-1) * stride + filter_size-2*padding;
+//     CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+//     CUDA_CHECK(cudaDeviceSynchronize());
+//     // create output array for convolution
+//     // int out_height = (height-1) * stride + filter_size-2*padding;
+//     // int out_width = (width-1) * stride + filter_size-2*padding;
 
-    printf("output dims %d %d %d %d\n", batch_size, output_channels, out_height, out_width);
+//     printf("output dims %d %d %d %d\n", batch_size, output_channels, out_height, out_width);
 
-    Tensor<float, 4> output({batch_size, in_channels, out_height, out_width}, false); // output for actual convolution
-    cudaMalloc(&output.data, output.size*sizeof(float));
+//     Tensor<float, 4> output({batch_size, in_channels, out_height, out_width}, false); // output for actual convolution
+//     cudaMalloc(&output.data, output.size*sizeof(float));
 
-    tds = 16; // 2d block -> 256 threads per thread block
-    block_height = (int) ceil((double)out_height / (double)tds);
-    block_width = (int) ceil((double)out_width / (double)tds);
+//     tds = 16; // 2d block -> 256 threads per thread block
+//     block_height = (int) ceil((double)out_height / (double)tds);
+//     block_width = (int) ceil((double)out_width / (double)tds);
 
-    dim3 threadDimOut(tds, tds, 1);
-    dim3 blockDimOut(block_width, block_height, output_channels*batch_size); // output_channel = num weights
+//     dim3 threadDimOut(tds, tds, 1);
+//     dim3 blockDimOut(block_width, block_height, output_channels*batch_size); // output_channel = num weights
 
-    CUDA_CHECK(cudaGetLastError()); 
-    CUDA_CHECK(cudaDeviceSynchronize());
-    conv_dldz_next<<<blockDimOut, threadDimOut>>>(tmp.data, output.data, dLdZ.data, dLdZ.d_dims, output.d_dims, tmp.d_dims, 0, 1, output_channels);
-    // conv_forward <<<blockDimOut, threadDimOut>>>(tmp.data, output.data, weights.data, bias.data, tmp.d_dims, output.d_dims, weights.d_dims,0, 1, use_bias); // no padding argument
-    CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
-    CUDA_CHECK(cudaDeviceSynchronize());
-    cudaFree(tmp.data);
+//     CUDA_CHECK(cudaGetLastError()); 
+//     CUDA_CHECK(cudaDeviceSynchronize());
+//     conv_dldz_next<<<blockDimOut, threadDimOut>>>(tmp.data, output.data, dLdZ.data, dLdZ.d_dims, output.d_dims, tmp.d_dims, 0, 1, output_channels);
+//     // conv_forward <<<blockDimOut, threadDimOut>>>(tmp.data, output.data, weights.data, bias.data, tmp.d_dims, output.d_dims, weights.d_dims,0, 1, use_bias); // no padding argument
+//     CUDA_CHECK(cudaGetLastError()); // Ensure there's no previous kernel launch errors
+//     CUDA_CHECK(cudaDeviceSynchronize());
+//     cudaFree(tmp.data);
 
-    return output;
-}
+//     return output;
+// }
 
 // __global__ void remove_pad(float* padded_in, float* out, int* in_dim, int* out_dim, int padding){
 //     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -409,7 +410,7 @@ Tensor<float, 4> conv_transpose_2d_dldz(Tensor<float,4> &input, Tensor<float, 4>
 // }
 
 
-__global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
+__global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters, float lr){
     int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -423,10 +424,23 @@ __global__ void apply_dw(float* weights, float* dw, int* w_dims, int n_filters){
 
     int idx = getIdx(w_dims, filter_idx, channel, y, x);
 
-    weights[idx] -= 0.01*clip_to_range(dw[idx]);
+    weights[idx] -= lr*clip_to_range(dw[idx], 10);
+    weights[idx] = clip_to_range(weights[idx], 1);
 }
 
-__global__ void apply_relu(float* dLdZ, float* output, int* out_dims, int output_channels){
+__global__ void apply_db(float* bias, float* db, int out_channels, int batch_size, float lr){
+    int x = blockIdx.z * blockDim.z + threadIdx.z; 
+
+    if(x>=out_channels){
+        return;
+    }
+
+    bias[idx] -= lr*clip_to_range(db[idx]/batch_size, 10);
+    bias[idx] = clip_to_range(bias[idx], 1);
+
+}
+
+__global__ void apply_relu(float* dLdZ, float* output, float* db, int* out_dims, int output_channels, bool use_relu, bool use_bias){
     // 4d dLdZ because conv
     int x = blockIdx.z * blockDim.z + threadIdx.z; 
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -438,12 +452,19 @@ __global__ void apply_relu(float* dLdZ, float* output, int* out_dims, int output
     if(x >= out_dims[3] || y >= out_dims[2] || channel >= out_dims[1] || batch >= out_dims[0]){
         return;
     }
-
+    
     int idx = getIdx(out_dims, batch, channel, y, x);
-    float val = output[idx];
 
-    if(val <= 0){
-        dLdZ[idx] = 0;
+    if(use_relu){
+        float val = output[idx];
+
+        if(val <= 0){
+            dLdZ[idx] = 0;
+        }
+    }
+
+    if(use_bias){
+        atomicAdd(&db[channel], dLdZ[idx]);
     }
 }
 
@@ -494,9 +515,10 @@ __global__ void get_next_dz(float* dz_next, float* weights, float* dz, int* next
 Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
+    cudaMemset(db.data, 0, db.size*sizeof(float));
 
     // checkMemoryLocation(input.data);
-    if(this->use_relu){ // apply relu backwards
+    if(this->use_relu || this->use_bias){ // apply relu backwards
         int tds = 16;
         int block_height = (int)ceil(((double)output.dim(2)) / (double)tds);
         int block_width = (int)ceil(((double)output.dim(3)) / (double)tds);
@@ -507,7 +529,7 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
         assert(output.dim(3) == dLdZ.dim(3));
         dim3 threadDimRelu(3, tds, tds);
         dim3 blockDimRelu(batch_size*output_channels, block_height, block_width);
-        apply_relu<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, output.data, output.d_dims, output_channels);
+        apply_relu<<<blockDimRelu, threadDimRelu>>>(dLdZ.data, output.data, db.data, output.d_dims, output_channels, this->use_relu, this->use_bias);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
@@ -572,9 +594,16 @@ Tensor<float, 4> Conv2d::backward(Tensor<float,4> &dLdZ){
     dim3 threadDimDw(3, tds, tds);
     dim3 blockDimDw( input_channels*output_channels, block_height, block_width); // move biggest dims onto block x as it can hold a fuck tonne of blocks
 
-    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims, output_channels);
+    apply_dw<<<blockDimDw, threadDimDw>>>(this->weights.data, dWdZ.data, this->weights.d_dims, output_channels, this->learning_rate);
     CUDA_CHECK(cudaGetLastError()); 
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    if(use_bias){
+        int grids = (int)ceil(((double)output_channels) / (double)tds);
+        apply_db<<<grids , 512>>>(bias.data, db.data, output_channels, batch_size, this->learning_rate);
+        CUDA_CHECK(cudaGetLastError()); 
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
     // cudaFree(input.data);
     // cudaFree(output.data);
