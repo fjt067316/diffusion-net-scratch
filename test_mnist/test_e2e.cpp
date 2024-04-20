@@ -101,7 +101,7 @@ int main(){
     // Seed the random number generator
     srand(time(0));
 
-    std::ifstream inputFile("../mnist/mnist_small.csv");
+    std::ifstream inputFile("../mnist/mnist_train.csv");
 
     if (!inputFile.is_open()) {
         cerr << "Error: could not open file" << endl;
@@ -118,16 +118,18 @@ int main(){
     int width = 28;//768;
 
     // in_channel, out_channel, filter_size, padding, stride  bool use_bias=true, bool use_relu=false
-    Conv2d conv1(channels, 16, 3, 0, 1, false, true); // Bx28x28->16x26,26
-    BatchNorm2d bn1(16);
-    Conv2d conv2(16, 32, 4, 0, 1, false, true); // 16x26,26 -> 32x23x23
-    BatchNorm2d bn2(32);
-    Conv2d conv3(32, 32, 4, 0, 2, false, true); // 32x23x23 -> 32x10x10
+    Conv2d conv1(channels, 32, 3, 0, 1, false, true); // Bx28x28->16x26,26
+    BatchNorm2d bn1(32);
+    Conv2d conv2(32, 64, 4, 0, 1, false, true); // 16x26,26 -> 32x23x23
+    BatchNorm2d bn2(64);
+    Conv2d conv3(64, 128, 4, 0, 2, true, true); // 32x23x23 -> 
+    BatchNorm2d bn3(128);
+    Conv2d conv4(128, 32, 4, 1, 1, true, true); // 128x10x10 -> 32x9x9
 
     // int input_size, int output_size, bool use_bias=true, bool use_relu=false
-    Linear lin1(32*10*10, 256, true, true);
+    Linear lin1(32*9*9, 512, true, true);
 
-    Linear lin2(256, 10, true, false);
+    Linear lin2(512, 10, true, false);
     
     int iterations = 10000;
 
@@ -162,10 +164,14 @@ int main(){
         // printf("%d %d %d %d\n", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
 
         x = conv3.forward(x);
+        x = bn3.forward(x);
+
+        x = conv4.forward(x);
+        // printf("%d %d %d %d", x.dim(0), x.dim(1), x.dim(2), x.dim(3));
         // x.toHost();
         // x.print();
         // x.toDevice();
-        Tensor<float, 2> flat_x({batch_size, 32*10*10}, false);
+        Tensor<float, 2> flat_x({batch_size, 32*9*9}, false);
 
         flat_x.data = x.data;
 
@@ -184,7 +190,7 @@ int main(){
         // out.toHost();
         // out.print();
         int correct_idx = labels[0];
-        printf("correct idx %d \n", correct_idx);
+        // printf("correct idx %d \n", correct_idx);
         out.toHost();
         // printf("out vals ");
         // out.print();
@@ -199,8 +205,8 @@ int main(){
                 idx = i;
             }
         }
-        predictions.print();
-        printf("correct %d loss %f\n", (idx == correct_idx), -1*std::log(predictions.data[correct_idx]+0.00000001));
+        // predictions.print();
+        printf("step %d correct %d loss %f\n", n, (idx == correct_idx), -1*std::log(predictions.data[correct_idx]+0.00000001));
 
         // float dLdZ_correct = predictions.data[correct_idx] - 1;
         for (int i = 0; i < out.size; i++) {
@@ -245,16 +251,19 @@ int main(){
         out.toDevice();
 
         auto dz = lin2.backward(out);
-
         dz = lin1.backward(dz);
 
         // lin1.weights.toHost();
         // lin1.weights.print();
         // lin1.weights.toDevice();
 
-        Tensor<float, 4> dz_conv({batch_size, 32,10,10}, false);
+        Tensor<float, 4> dz_conv({batch_size, 32,9,9}, false);
 
         dz_conv.data = dz.data;
+
+        dz_conv = conv4.backward(dz_conv);
+
+        dz_conv = bn3.backward(dz_conv);
 
         dz_conv = conv3.backward(dz_conv);
         // dz_conv.toHost();
